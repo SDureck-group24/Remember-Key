@@ -1,0 +1,97 @@
+/* App-Schicht über Nocturne (src/lib/nocturne/styles.css). Nur Ergänzungen, die das
+   Designsystem nicht abdeckt – Farben, Abstände und Radien kommen aus dessen Tokens. */
+
+:root {
+  /* Inter lokal (Fontsource, variable) statt Google Fonts. */
+  --font-heading: "Inter Variable", "Inter", system-ui, sans-serif;
+  --font-body: "Inter Variable", "Inter", system-ui, sans-serif;
+  --font-mono: "Cascadia Mono", Consolas, monospace;
+
+  /* App-Ergänzung: Nocturne hat keine Fehlerrolle. Gedämpftes Rot auf derselben
+     OKLCH-Helligkeit wie der Akzent (L ≈ 0.66), damit es nicht schreit. */
+  --color-danger: #d97a82;
+  --color-danger-900: #3b2529;
+
+  --color-text-muted: color-mix(in srgb, var(--color-text) 55%, transparent);
+  color-scheme: dark;
+}
+
+html,
+body {
+  height: 100%;
+  overflow: hidden;
+}
+
+button,
+input,
+textarea {
+  font-family: inherit;
+}
+
+.mono {
+  font-family: var(--font-mono);
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.grow {
+  flex: 1;
+  min-width: 0;
+}
+
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+}
+
+.error {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--color-danger);
+  font-size: 13px;
+}
+
+.hint {
+  font-size: 12px;
+  color: var(--color-text-muted);
+  margin-top: var(--space-1);
+}
+
+/* Destruktive Aktion: wie .btn-secondary, aber im Fehlerton. */
+.btn-danger {
+  color: var(--color-danger);
+  border-color: color-mix(in srgb, var(--color-danger) 55%, transparent);
+}
+.btn-danger:hover {
+  background: color-mix(in srgb, var(--color-danger) 12%, transparent);
+}
+.btn-danger:active {
+  background: color-mix(in srgb, var(--color-danger) 22%, transparent);
+}
+
+/* Kleine Icon-Buttons für Zeilenaktionen (Kopieren, Anzeigen). */
+.btn-icon.btn-sm {
+  width: 30px;
+  height: 30px;
+}
+.btn-icon:not(.btn-primary):not(.btn-danger):hover {
+  background: color-mix(in srgb, var(--color-text) 7%, transparent);
+}
+.btn-icon:not(.btn-primary):not(.btn-danger):active {
+  background: color-mix(in srgb, var(--color-text) 14%, transparent);
+}
+
+/* Segment-Optionen mit Checkboxen (Mehrfachauswahl) nutzen die .seg-Optik. */
+.seg {
+  flex-wrap: wrap;
+}
+
+.field + .field {
+  margin-top: var(--space-6);
+}
