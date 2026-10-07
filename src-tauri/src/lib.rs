@@ -1,3 +1,4 @@
+mod agent;
 mod clipboard;
 mod error;
 mod gdrive;
@@ -20,7 +21,7 @@ use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 use error::{Error, Result};
 use generator::{GenOptions, Generated};
-use vault::{Entry, Settings, UnlockedVault};
+use vault::{AgentPolicy, Entry, Settings, UnlockedVault};
 
 const LOCKED_EVENT: &str = "vault-locked";
 
@@ -130,6 +131,8 @@ struct EntrySummary {
     has_totp: bool,
     folder_id: Option<String>,
     updated_at: i64,
+    /// Für KI-Assistenten freigegeben.
+    agent: bool,
 }
 
 /// Das Passwort selbst wird nur auf Anforderung (`reveal_password`) übertragen.
@@ -146,6 +149,7 @@ struct EntryDetail {
     folder_id: Option<String>,
     created_at: i64,
     updated_at: i64,
+    agent: AgentPolicy,
 }
 
 #[derive(Deserialize, Zeroize)]
@@ -161,6 +165,8 @@ struct EntryInput {
     notes: String,
     totp: String,
     folder_id: Option<String>,
+    #[serde(default)]
+    agent: AgentPolicy,
 }
 
 #[derive(Serialize)]
@@ -310,6 +316,7 @@ fn list_entries(state: State<'_, AppState>) -> Result<Vec<EntrySummary>> {
             has_totp: e.totp.is_some(),
             folder_id: e.folder_id.clone(),
             updated_at: e.updated_at,
+            agent: e.agent.as_ref().is_some_and(|a| a.enabled),
         })
         .collect();
     list.sort_by_key(|e| e.title.to_lowercase());
@@ -331,6 +338,7 @@ fn get_entry(state: State<'_, AppState>, id: String) -> Result<EntryDetail> {
         folder_id: e.folder_id.clone(),
         created_at: e.created_at,
         updated_at: e.updated_at,
+        agent: e.agent.clone().unwrap_or_default(),
     })
 }
 
@@ -350,6 +358,7 @@ fn save_entry(state: State<'_, AppState>, entry: EntryInput) -> Result<String> {
         "" => None,
         s => Some(totp::parse_input(s)?),
     };
+    let agent = agent_policy(&entry.agent, &entry.url)?;
     let ts = now();
     let mut g = state.lock();
     let v = g.vault()?;
@@ -366,6 +375,7 @@ fn save_entry(state: State<'_, AppState>, entry: EntryInput) -> Result<String> {
             e.notes = entry.notes.clone();
             e.totp = totp_cfg;
             e.folder_id = entry.folder_id.clone();
+            e.agent = agent;
             e.updated_at = ts;
             id.clone()
         }
@@ -382,12 +392,37 @@ fn save_entry(state: State<'_, AppState>, entry: EntryInput) -> Result<String> {
                 folder_id: entry.folder_id.clone(),
                 created_at: ts,
                 updated_at: ts,
+                agent,
             });
             id
         }
     };
     g.persist()?;
     Ok(id)
+}
+
+/// Prüft die KI-Freigabe. Ohne eigene Hosts gilt der Host der Website-Adresse.
+fn agent_policy(input: &AgentPolicy, url: &str) -> Result<Option<AgentPolicy>> {
+    let mut hosts: Vec<String> = Vec::new();
+    for h in input.hosts.iter().filter(|h| !h.trim().is_empty()) {
+        let h = vault::normalize_host(h)?;
+        if !hosts.contains(&h) {
+            hosts.push(h);
+        }
+    }
+    let url = url.trim();
+    if input.enabled && hosts.is_empty() && !url.is_empty() {
+        let full = if url.contains("://") { url.to_string() } else { format!("https://{url}") };
+        if let Ok(h) = vault::normalize_host(&full) {
+            hosts.push(h);
+        }
+    }
+    if input.enabled && hosts.is_empty() {
+        return Err(Error::Invalid(
+            "Für die KI-Freigabe wird ein Host oder eine Website-Adresse benötigt".into(),
+        ));
+    }
+    Ok((input.enabled || !hosts.is_empty()).then(|| AgentPolicy { enabled: input.enabled, hosts }))
 }
 
 #[tauri::command]
@@ -523,6 +558,25 @@ fn set_settings(state: State<'_, AppState>, mut settings: Settings) -> Result<()
     g.persist()
 }
 
+// ---------- KI-Zugriff ----------
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentInfo {
+    /// Pfad der MCP-Brücke; `None`, wenn sie nicht neben der App liegt.
+    bridge_path: Option<String>,
+    log: Vec<agent::LogEntry>,
+}
+
+#[tauri::command]
+fn agent_info(state: State<'_, AppState>) -> Result<AgentInfo> {
+    state.lock().vault()?;
+    Ok(AgentInfo {
+        bridge_path: agent::bridge_path().map(|p| p.display().to_string()),
+        log: agent::read_log(200),
+    })
+}
+
 // ---------- Google Drive ----------
 
 #[tauri::command]
@@ -617,6 +671,7 @@ pub fn run() {
             spawn_auto_lock(app.handle().clone());
             session::spawn(app.handle().clone());
             sync::spawn_worker(app.handle().clone(), sync_rx);
+            agent::spawn(app.handle().clone(), &dir);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -642,6 +697,7 @@ pub fn run() {
             generate_password,
             get_settings,
             set_settings,
+            agent_info,
             sync_status,
             sync_configure,
             sync_connect,
@@ -659,4 +715,31 @@ pub fn run() {
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn policy(enabled: bool, hosts: &[&str]) -> AgentPolicy {
+        AgentPolicy { enabled, hosts: hosts.iter().map(|h| h.to_string()).collect() }
+    }
+
+    #[test]
+    fn agent_policy_defaults_to_website_host() {
+        let p = agent_policy(&policy(true, &[]), "github.com/login").unwrap().unwrap();
+        assert_eq!(p.hosts, ["github.com"]);
+        let p = agent_policy(&policy(true, &["API.github.com", "api.github.com", " "]), "https://x.de").unwrap().unwrap();
+        assert_eq!(p.hosts, ["api.github.com"]);
+    }
+
+    #[test]
+    fn agent_policy_validation() {
+        assert!(agent_policy(&policy(true, &[]), "").is_err());
+        assert!(agent_policy(&policy(true, &["github.com/pfad"]), "").is_err());
+        assert!(agent_policy(&policy(false, &[]), "https://x.de").unwrap().is_none());
+        // Ausgeschaltet, aber Hosts bleiben für späteres Einschalten erhalten.
+        let p = agent_policy(&policy(false, &["x.de"]), "").unwrap().unwrap();
+        assert!(!p.enabled);
+    }
 }

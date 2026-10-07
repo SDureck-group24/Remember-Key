@@ -4,9 +4,9 @@
   "version": "0.1.0",
   "identifier": "com.rememberkey.app",
   "build": {
-    "beforeDevCommand": "npm run dev",
+    "beforeDevCommand": "npm run build:bridge && npm run dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "npm run build",
+    "beforeBuildCommand": "npm run build:bridge && npm run build",
     "frontendDist": "../build"
   },
   "app": {
@@ -29,6 +29,7 @@
   "bundle": {
     "active": true,
     "targets": ["nsis"],
+    "externalBin": ["binaries/remember-key-mcp"],
     "publisher": "Simon Dureck",
     "copyright": "© 2026 Simon Dureck",
     "category": "Utility",

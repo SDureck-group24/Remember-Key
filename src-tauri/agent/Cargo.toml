@@ -1,0 +1,30 @@
+[package]
+name = "rk-agent"
+version = "0.1.0"
+description = "Pipe-Protokoll und MCP-Brücke für den KI-Zugriff auf Remember Key"
+edition = "2021"
+
+# Bibliothek: Protokoll und Named-Pipe-Hilfen (von App und Brücke genutzt).
+# Bewusst ohne Abhängigkeit zum Tresorcode.
+[lib]
+name = "rk_agent"
+path = "src/lib.rs"
+
+[[bin]]
+name = "remember-key-mcp"
+path = "src/main.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Storage_FileSystem",
+    "Win32_System_IO",
+    "Win32_System_Pipes",
+    "Win32_System_Threading",
+] }

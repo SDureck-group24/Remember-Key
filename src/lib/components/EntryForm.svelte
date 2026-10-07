@@ -25,7 +25,9 @@
   let password = $state("");
   let passwordTouched = $state(false);
   let hasStoredPassword = $state(false);
-  let form = $state<Omit<EntryInput, "password">>({
+  let agentEnabled = $state(false);
+  let agentHosts = $state("");
+  let form = $state<Omit<EntryInput, "password" | "agent">>({
     id: null,
     title: "",
     username: "",
@@ -54,6 +56,8 @@
           totp: d.totp,
           folderId: d.folderId,
         };
+        agentEnabled = d.agent.enabled;
+        agentHosts = d.agent.hosts.join(", ");
       } catch (e) {
         error = errorText(e);
       }
@@ -91,7 +95,8 @@
     busy = true;
     error = "";
     try {
-      onsaved(await api.save({ ...form, password: !id || passwordTouched ? password : null }));
+      const agent = { enabled: agentEnabled, hosts: agentHosts.split(/[\s,;]+/).filter(Boolean) };
+      onsaved(await api.save({ ...form, password: !id || passwordTouched ? password : null, agent }));
     } catch (err) {
       error = errorText(err);
     } finally {
@@ -185,6 +190,31 @@
       <textarea id="notes" class="input" bind:value={form.notes}></textarea>
     </div>
 
+    <div class="field">
+      <span class="lbl">KI-Zugriff</span>
+      <div class="seg">
+        <label class="seg-opt">
+          <input type="checkbox" bind:checked={agentEnabled} />
+          Für KI-Assistenten freigeben
+        </label>
+      </div>
+      {#if agentEnabled}
+        <input
+          id="agent-hosts"
+          class="input hosts"
+          bind:value={agentHosts}
+          spellcheck="false"
+          autocomplete="off"
+          aria-label="Erlaubte Hosts"
+          placeholder="Leer = Host der Website, z. B. api.github.com, *.example.com"
+        />
+      {/if}
+      <div class="hint">
+        Die KI sieht nur Titel, Benutzername und Hosts – nie das Passwort. Zugangsdaten werden nur an die genannten
+        Hosts gebunden.
+      </div>
+    </div>
+
     {#if error}<p class="error"><Icon name="warning-circle" size={16} /> {error}</p>{/if}
 
     <div class="row actions">
@@ -221,5 +251,15 @@
   }
   .actions {
     margin-top: var(--space-8);
+  }
+  /* Wie .field > label */
+  .lbl {
+    display: block;
+    font-size: 12px;
+    margin-bottom: 5px;
+    color: color-mix(in srgb, var(--color-text) 70%, transparent);
+  }
+  .hosts {
+    margin-top: var(--space-3);
   }
 </style>

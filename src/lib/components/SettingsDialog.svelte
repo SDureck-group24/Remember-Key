@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import { api, errorText, MIN_MASTER_LEN, MIN_MASTER_SCORE, type Settings } from "$lib/api";
   import { store } from "$lib/store.svelte";
+  import AgentAccess from "./AgentAccess.svelte";
   import GoogleDrive from "./GoogleDrive.svelte";
   import Icon from "./Icon.svelte";
   import Strength from "./Strength.svelte";
@@ -33,6 +34,7 @@
       await api.setSettings({
         autoLockMinutes: Number(settings.autoLockMinutes),
         clipboardClearSeconds: Number(settings.clipboardClearSeconds),
+        agentEnabled: settings.agentEnabled,
       });
       onnotify("Einstellungen gespeichert");
       onclose();
@@ -94,6 +96,14 @@
             </div>
           </div>
         </div>
+        <h6 class="agent-title">KI-Zugriff</h6>
+        <div class="seg">
+          <label class="seg-opt">
+            <input type="checkbox" bind:checked={settings.agentEnabled} />
+            KI-Assistenten den Zugriff auf freigegebene Einträge erlauben
+          </label>
+        </div>
+        <AgentAccess enabled={settings.agentEnabled} />
         {#if error}<p class="error"><Icon name="warning-circle" size={16} /> {error}</p>{/if}
         <div class="dialog-actions">
           <button class="btn btn-primary"><Icon name="check" size={15} /> Speichern</button>
@@ -144,6 +154,9 @@
   h6 {
     color: var(--color-text-muted);
     margin: var(--space-4) 0 var(--space-4);
+  }
+  .agent-title {
+    margin-top: var(--space-6);
   }
   .master,
   .drive {

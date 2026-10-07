@@ -8,7 +8,7 @@ Lokaler Passwort- und Login-Manager für Windows (Tauri 2 · Rust · SvelteKit).
 npm install
 npm run tauri dev      # App im Dev-Modus starten
 npm run check          # TypeScript/Svelte prüfen
-cd src-tauri && cargo test   # Rust-Unit-Tests (Krypto, TOTP, Generator)
+cd src-tauri && cargo test --workspace   # Rust-Unit-Tests (Krypto, TOTP, Generator, KI-Zugriff)
 npm run tauri build    # Installer (NSIS/MSI) unter src-tauri/target/release/bundle
 ```
 
@@ -37,6 +37,19 @@ Nach Änderungen am Designsystem `styles.css` neu kopieren.
 - **Zwischenablage:** Kopieren läuft im Backend; Inhalte werden vom Windows-Verlauf (Win+V) und Cloud-Sync
   ausgeschlossen und nach 30 s geleert (nur, falls zwischenzeitlich nichts anderes kopiert wurde).
 - **Webview:** strikte CSP, keine Plugins außer Events, eingefrorene Prototypen.
+
+## KI-Zugriff (MCP)
+
+- KI-Assistenten (z. B. Claude Code) können freigegebene Einträge über die MCP-Brücke `remember-key-mcp.exe`
+  nutzen, ohne Passwörter, Notizen oder 2FA-Schlüssel zu sehen. Plan und Bedrohungsmodell: `docs/plan-mcp-server.md`.
+- Aus per Standard: globaler Schalter in den Einstellungen, zusätzlich Freigabe pro Eintrag mit gebundenen Hosts
+  (Standard: Host der Website).
+- Die Brücke (`src-tauri/agent/`) hält keine Geheimnisse und spricht über die Named Pipe
+  `\\.\pipe\com.rememberkey.agent.<SID>` (nur aktueller Benutzer) mit der App. Die App akzeptiert nur die Brücke aus
+  ihrem eigenen Verzeichnis. Jede Anfrage steht im Protokoll `%APPDATA%\com.rememberkey.app\agent-log.jsonl`.
+- `npm run build:bridge` baut die Brücke nach `src-tauri/binaries/` (läuft automatisch vor `tauri dev`/`build`).
+- Einrichten: `claude mcp add remember-key -- "<App-Verzeichnis>\remember-key-mcp.exe"`.
+- Phase 1: nur `list_entries` (Metadaten). Das Einsetzen von Zugangsdaten folgt in Phase 2.
 
 ## Google-Drive-Sync
 

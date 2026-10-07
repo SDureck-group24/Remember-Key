@@ -13,6 +13,15 @@ export interface EntrySummary {
   hasTotp: boolean;
   folderId: string | null;
   updatedAt: number;
+  /** Für KI-Assistenten freigegeben. */
+  agent: boolean;
+}
+
+/** Freigabe eines Eintrags für KI-Assistenten (MCP). */
+export interface AgentPolicy {
+  enabled: boolean;
+  /** Hosts, an die die Zugangsdaten gebunden sind (`example.com`, `*.example.com`). */
+  hosts: string[];
 }
 
 export interface EntryDetail {
@@ -27,6 +36,7 @@ export interface EntryDetail {
   folderId: string | null;
   createdAt: number;
   updatedAt: number;
+  agent: AgentPolicy;
 }
 
 export interface EntryInput {
@@ -39,6 +49,7 @@ export interface EntryInput {
   notes: string;
   totp: string;
   folderId: string | null;
+  agent: AgentPolicy;
 }
 
 export interface Strength {
@@ -65,6 +76,22 @@ export interface FolderInput {
 export interface Settings {
   autoLockMinutes: number;
   clipboardClearSeconds: number;
+  agentEnabled: boolean;
+}
+
+export type AgentOutcome = "ok" | "locked" | "disabled" | "rejected";
+
+export interface AgentLogEntry {
+  ts: number;
+  tool: string;
+  detail: string;
+  outcome: AgentOutcome;
+}
+
+export interface AgentInfo {
+  /** Pfad der MCP-Brücke; `null`, wenn sie nicht neben der App liegt. */
+  bridgePath: string | null;
+  log: AgentLogEntry[];
 }
 
 export interface GenOptions {
@@ -148,6 +175,8 @@ export const api = {
 
   getSettings: () => invoke<Settings>("get_settings"),
   setSettings: (settings: Settings) => invoke<void>("set_settings", { settings }),
+
+  agentInfo: () => invoke<AgentInfo>("agent_info"),
 };
 
 export function errorText(e: unknown): string {

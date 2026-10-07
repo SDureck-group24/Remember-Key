@@ -5,6 +5,9 @@ description = "Lokaler Passwort- und Login-Manager"
 authors = ["you"]
 edition = "2021"
 
+[workspace]
+members = ["agent"]
+
 [lib]
 # The `_lib` suffix may seem redundant but it is necessary
 # to make the lib name unique and wouldn't conflict with the bin name.
@@ -35,6 +38,9 @@ data-encoding = "2"
 url = "2"
 
 uuid = { version = "1", features = ["v4"] }
+
+# KI-Zugriff (Pipe-Protokoll, gemeinsam mit der MCP-Brücke)
+rk-agent = { path = "agent" }
 
 # Google-Drive-Sync
 ureq = { version = "2", features = ["json"] }

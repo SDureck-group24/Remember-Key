@@ -28,6 +28,7 @@ import magnifyingGlass from "@phosphor-icons/core/assets/regular/magnifying-glas
 import password from "@phosphor-icons/core/assets/regular/password.svg?raw";
 import pencilSimple from "@phosphor-icons/core/assets/regular/pencil-simple.svg?raw";
 import plus from "@phosphor-icons/core/assets/regular/plus.svg?raw";
+import robot from "@phosphor-icons/core/assets/regular/robot.svg?raw";
 import shieldCheck from "@phosphor-icons/core/assets/regular/shield-check.svg?raw";
 import trash from "@phosphor-icons/core/assets/regular/trash.svg?raw";
 import warningCircle from "@phosphor-icons/core/assets/regular/warning-circle.svg?raw";
@@ -63,6 +64,7 @@ export const icons = {
   password,
   "pencil-simple": pencilSimple,
   plus,
+  robot,
   "shield-check": shieldCheck,
   trash,
   "warning-circle": warningCircle,

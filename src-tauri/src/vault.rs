@@ -99,6 +99,49 @@ pub struct Entry {
     pub folder_id: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
+    /// Freigabe für KI-Assistenten (MCP). Fehlt bei älteren Tresoren und nie genutzten Einträgen.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<AgentPolicy>,
+}
+
+/// Regeln, nach denen ein KI-Assistent einen Eintrag nutzen darf, ohne ihn zu sehen.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, Zeroize, ZeroizeOnDrop)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentPolicy {
+    pub enabled: bool,
+    /// Normalisierte Hosts (`example.com`, `*.example.com`), an die die Zugangsdaten gebunden sind.
+    #[serde(default)]
+    pub hosts: Vec<String>,
+}
+
+/// Normalisiert eine Host-Angabe: URL oder Host, optional mit `*.`-Präfix für Subdomains.
+/// Internationale Domains werden in Punycode umgewandelt.
+pub fn normalize_host(input: &str) -> Result<String> {
+    let s = input.trim();
+    let invalid = || Error::Invalid(format!("Ungültiger Host: {s}"));
+    if s.is_empty() {
+        return Err(invalid());
+    }
+    let (wildcard, rest) = match s.strip_prefix("*.") {
+        Some(r) => (true, r),
+        None => (false, s),
+    };
+    let host = if rest.contains("://") {
+        url::Url::parse(rest).map_err(|_| invalid())?.host_str().ok_or_else(invalid)?.to_string()
+    } else {
+        if rest.contains(['/', ':', '@', '?', '#', '*']) {
+            return Err(invalid());
+        }
+        match url::Host::parse(rest).map_err(|_| invalid())? {
+            url::Host::Domain(d) => d,
+            other => other.to_string(),
+        }
+    };
+    let host = host.trim_end_matches('.').to_ascii_lowercase();
+    if host.is_empty() || (wildcard && !host.contains('.')) {
+        return Err(invalid());
+    }
+    Ok(if wildcard { format!("*.{host}") } else { host })
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Zeroize, ZeroizeOnDrop)]
@@ -132,11 +175,14 @@ pub struct Settings {
     /// Zeitpunkt der letzten Änderung (für die Zusammenführung zwischen Geräten).
     #[serde(default)]
     pub updated_at: i64,
+    /// KI-Assistenten dürfen über die MCP-Brücke auf freigegebene Einträge zugreifen.
+    #[serde(default)]
+    pub agent_enabled: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { auto_lock_minutes: 5, clipboard_clear_seconds: 30, updated_at: 0 }
+        Self { auto_lock_minutes: 5, clipboard_clear_seconds: 30, updated_at: 0, agent_enabled: false }
     }
 }
 
@@ -278,9 +324,8 @@ impl VaultData {
 
         self.key_changed_at = self.key_changed_at.max(other.key_changed_at);
         let s = other.settings;
-        if (s.updated_at, s.auto_lock_minutes, s.clipboard_clear_seconds)
-            > (self.settings.updated_at, self.settings.auto_lock_minutes, self.settings.clipboard_clear_seconds)
-        {
+        let key = |s: &Settings| (s.updated_at, s.auto_lock_minutes, s.clipboard_clear_seconds, s.agent_enabled);
+        if key(&s) > key(&self.settings) {
             self.settings = s;
         }
         self.repair();
@@ -668,6 +713,7 @@ mod tests {
             folder_id: None,
             created_at: 0,
             updated_at: 0,
+            agent: None,
         }
     }
 
@@ -800,9 +846,36 @@ mod tests {
     fn merge_settings_newer_wins() {
         let mut a = VaultData::default();
         let mut b = VaultData::default();
-        b.settings = Settings { auto_lock_minutes: 15, clipboard_clear_seconds: 30, updated_at: 9 };
+        b.settings = Settings { auto_lock_minutes: 15, clipboard_clear_seconds: 30, updated_at: 9, agent_enabled: true };
         a.merge(&b);
         assert_eq!(a.settings.auto_lock_minutes, 15);
+        assert!(a.settings.agent_enabled);
+    }
+
+    #[test]
+    fn normalize_host_variants() {
+        assert_eq!(normalize_host("https://GitHub.com/login").unwrap(), "github.com");
+        assert_eq!(normalize_host(" api.github.com ").unwrap(), "api.github.com");
+        assert_eq!(normalize_host("*.Example.com").unwrap(), "*.example.com");
+        assert_eq!(normalize_host("bücher.de").unwrap(), "xn--bcher-kva.de");
+        assert_eq!(normalize_host("example.com.").unwrap(), "example.com");
+        for bad in ["", "*", "*.com", "example.com/pfad", "user@example.com", "example.com:8080", "a*.b.com"] {
+            assert!(normalize_host(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn agent_policy_is_optional_and_merges_with_entry() {
+        // Einträge ohne Freigabe serialisieren unverändert (wichtig für den Gleichstand beim Merge).
+        assert!(!serde_json::to_string(&sample_entry()).unwrap().contains("agent"));
+        let mut a = VaultData::default();
+        a.entries.push(entry("1", "Mail", 1));
+        let mut b = VaultData::default();
+        let mut e = entry("1", "Mail", 2);
+        e.agent = Some(AgentPolicy { enabled: true, hosts: vec!["mail.example.com".into()] });
+        b.entries.push(e);
+        a.merge(&b);
+        assert_eq!(a.entries[0].agent.as_ref().unwrap().hosts, ["mail.example.com"]);
     }
 
     #[test]

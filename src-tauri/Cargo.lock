@@ -3055,6 +3055,7 @@ dependencies = [
  "hmac",
  "keyring",
  "rand",
+ "rk-agent",
  "serde",
  "serde_json",
  "sha1",
@@ -3118,6 +3119,15 @@ dependencies = [
  "libc",
  "untrusted",
  "windows-sys 0.52.0",
+]
+
+[[package]]
+name = "rk-agent"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

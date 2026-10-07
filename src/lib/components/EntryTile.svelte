@@ -47,6 +47,7 @@
       </span>
     {/if}
     {#if entry.hasTotp}<span class="tag tag-accent">2FA</span>{/if}
+    {#if entry.agent}<span class="tag tag-neutral" title="Für KI-Assistenten freigegeben">KI</span>{/if}
     <span class="grow"></span>
     {#if entry.username}
       <button class="btn btn-icon btn-sm" title="Benutzername kopieren" aria-label="Benutzername kopieren" onclick={() => oncopy("username", "Benutzername")}>

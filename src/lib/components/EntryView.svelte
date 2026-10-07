@@ -139,6 +139,11 @@
         <dd><span class="value grow">{detail.url}</span></dd>
       {/if}
 
+      {#if detail.agent.enabled}
+        <dt>KI-Zugriff</dt>
+        <dd><span class="value grow"><Icon name="robot" size={14} /> Freigegeben für {detail.agent.hosts.join(", ")}</span></dd>
+      {/if}
+
       {#if detail.notes}
         <dt>Notizen</dt>
         <dd><span class="value notes grow">{detail.notes}</span></dd>
