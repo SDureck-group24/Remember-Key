@@ -31,6 +31,8 @@ pub enum Decision {
 #[serde(rename_all = "camelCase")]
 pub struct Pending {
     pub id: u64,
+    /// `http` (Anfrage mit eingesetztem Geheimnis) oder `fill` (Login im Browser).
+    pub action: String,
     pub entry_title: String,
     pub method: String,
     pub host: String,
@@ -163,6 +165,7 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let p = Pending {
             id: 4242,
+            action: "http".into(),
             entry_title: String::new(),
             method: "GET".into(),
             host: "x.de".into(),

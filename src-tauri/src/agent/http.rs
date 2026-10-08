@@ -348,7 +348,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     fn policy(auth: Vec<AuthLocation>) -> AgentPolicy {
-        AgentPolicy { enabled: true, hosts: vec!["api.github.com".into(), "*.example.com".into()], auth, session_minutes: 0 }
+        AgentPolicy { enabled: true, hosts: vec!["api.github.com".into(), "*.example.com".into()], auth, session_minutes: 0, fill_login: false }
     }
 
     fn req(url: &str) -> HttpRequest {
@@ -378,6 +378,7 @@ mod tests {
             hosts: vec!["localhost".into(), "127.0.0.1".into(), "intranet.example.com".into()],
             auth: vec![AuthLocation::Basic],
             session_minutes: 0,
+            fill_login: false,
         };
         assert!(prepare(&req("http://localhost:7781/api"), &pol).is_ok());
         assert!(prepare(&req("http://127.0.0.1/"), &pol).is_ok());
@@ -522,7 +523,7 @@ mod tests {
     fn echo_service_reflection_is_redacted() {
         let pw = "dummy-Geheimnis-7f3a";
         for auth in [AuthLocation::Bearer, AuthLocation::Basic, AuthLocation::Header { name: "X-Api-Key".into() }] {
-            let pol = AgentPolicy { enabled: true, hosts: vec!["httpbin.org".into()], auth: vec![auth], session_minutes: 0 };
+            let pol = AgentPolicy { enabled: true, hosts: vec!["httpbin.org".into()], auth: vec![auth], session_minutes: 0, fill_login: false };
             let p = prepare(&req("https://httpbin.org/anything?probe=1"), &pol).unwrap();
             let mut e = entry(pw, "");
             e.username = "tester".into();

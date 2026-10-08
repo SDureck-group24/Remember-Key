@@ -6,19 +6,22 @@
 //!
 //! Antworten enthalten nur Metadaten freigegebener Einträge – nie Passwörter, Notizen
 //! oder TOTP-Daten. Bei `http_request` setzt die App das Passwort selbst ein, nachdem der
-//! Nutzer zugestimmt hat (`approval`), und bereinigt die Antwort (`http`).
+//! Nutzer zugestimmt hat (`approval`), und bereinigt die Antwort (`http`). Bei `fill_login`
+//! füllt die Browser-Erweiterung das Login aus (`browser`, Registrierung in `native`).
 //! Agent-Anfragen zählen nicht als Aktivität (Auto-Sperre bleibt wirksam).
 
 mod approval;
+mod browser;
 mod http;
+mod native;
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
-use rk_agent::{AgentEntry, HttpRequest, Request, Response};
+use rk_agent::{AgentEntry, FillLogin, HttpRequest, Request, Response};
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::vault::{UnlockedVault, VaultData};
@@ -31,6 +34,8 @@ const LOG_FILE: &str = "agent-log.jsonl";
 const LOG_MAX_LINES: usize = 1000;
 
 static LOG_PATH: OnceLock<PathBuf> = OnceLock::new();
+/// App-Datenverzeichnis (für die Native-Messaging-Manifeste).
+static DATA_DIR: OnceLock<PathBuf> = OnceLock::new();
 static LOG_LOCK: Mutex<()> = Mutex::new(());
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -109,7 +114,42 @@ fn handle(app: &AppHandle, req: Request) -> Response {
             resp
         }
         Request::HttpRequest(req) => http_request(app, &req),
+        Request::FillLogin(req) => fill_login(app, &req),
+        // Nur vom Browser-Host, siehe `serve`.
+        Request::RegisterBrowser { .. } | Request::BrowserResult { .. } => {
+            Err("Anfrage für diesen Client nicht erlaubt".into())
+        }
     }
+}
+
+/// Verbundene Browser-Erweiterungen.
+pub fn browsers() -> Vec<String> {
+    browser::connected()
+}
+
+/// Registriert den Native-Messaging-Host (nach dem Einschalten des KI-Zugriffs).
+pub fn register_browser_host() {
+    if let Some(dir) = DATA_DIR.get() {
+        if let Err(e) = native::register(dir) {
+            eprintln!("Browser-Erweiterung: {e}");
+        }
+    }
+}
+
+/// Fragt den Nutzer, falls keine Sitzungsfreigabe besteht. Bei Ablehnung ist die Anfrage
+/// bereits protokolliert und `Err` enthält die Meldung für die KI.
+fn confirm(app: &AppHandle, tool: &str, pending: Pending, key: approval::GrantKey, detail: &str) -> Result<&'static str, String> {
+    if approval::has_grant(&key) {
+        return Ok("Sitzungsfreigabe");
+    }
+    let refusal = match approval::ask(app, pending, key) {
+        Decision::Once => return Ok("einmal bestätigt"),
+        Decision::Session => return Ok("für Sitzung bestätigt"),
+        Decision::Deny => "Der Nutzer hat die Anfrage in Remember Key abgelehnt.",
+        Decision::Timeout => "Keine Bestätigung in Remember Key (Zeit abgelaufen oder Tresor gesperrt).",
+    };
+    log(app, tool, format!("{detail} · {refusal}"), Outcome::Denied);
+    Err(refusal.into())
 }
 
 type Refusal = (String, Outcome);
@@ -190,33 +230,18 @@ fn http_request(app: &AppHandle, req: &HttpRequest) -> Response {
     let detail = format!("{} · {title}", prepared.summary());
     let key = (req.entry_id.clone(), prepared.host.clone(), prepared.auth.key());
 
-    let approval_note = if approval::has_grant(&key) {
-        "Sitzungsfreigabe"
-    } else {
-        let pending = Pending {
-            id: 0,
-            entry_title: title.clone(),
-            method: prepared.method.clone(),
-            host: prepared.host.clone(),
-            path: prepared.url.path().to_string(),
-            auth: prepared.auth.key(),
-            session_minutes,
-            expires_at: 0,
-        };
-        match approval::ask(app, pending, key) {
-            Decision::Once => "einmal bestätigt",
-            Decision::Session => "für Sitzung bestätigt",
-            Decision::Deny => {
-                return refuse(("Der Nutzer hat die Anfrage in Remember Key abgelehnt.".into(), Outcome::Denied), detail)
-            }
-            Decision::Timeout => {
-                return refuse(
-                    ("Keine Bestätigung in Remember Key (Zeit abgelaufen oder Tresor gesperrt).".into(), Outcome::Denied),
-                    detail,
-                )
-            }
-        }
+    let pending = Pending {
+        id: 0,
+        action: "http".into(),
+        entry_title: title.clone(),
+        method: prepared.method.clone(),
+        host: prepared.host.clone(),
+        path: prepared.url.path().to_string(),
+        auth: prepared.auth.key(),
+        session_minutes,
+        expires_at: 0,
     };
+    let approval_note = confirm(app, TOOL, pending, key, &detail)?;
 
     let creds = match credentials(app, req, &prepared) {
         Ok(c) => c,
@@ -228,6 +253,112 @@ fn http_request(app: &AppHandle, req: &HttpRequest) -> Response {
     match result {
         Ok(v) => {
             log(app, TOOL, format!("{detail} · {} · {source} · {approval_note}", v["status"]), Outcome::Ok);
+            Ok(v)
+        }
+        Err(msg) => {
+            log(app, TOOL, format!("{detail} · {msg}"), Outcome::Failed);
+            Err(msg)
+        }
+    }
+}
+
+/// Prüft eine `fill_login`-Anfrage. Liefert Titel, Hosts der Freigabe, Ziel-Host (falls
+/// angegeben) und Dauer einer Sitzungsfreigabe.
+fn check_fill(app: &AppHandle, req: &FillLogin) -> Result<(String, Vec<String>, Option<String>, u32), Refusal> {
+    let reject = |m: &str| (m.to_string(), Outcome::Rejected);
+    let hint = match req.url.as_deref() {
+        None => None,
+        Some(u) => {
+            let full = if u.contains("://") { u.trim().to_string() } else { format!("https://{}", u.trim()) };
+            let host = url::Url::parse(&full).ok().and_then(|x| x.host_str().map(str::to_ascii_lowercase));
+            Some(host.ok_or_else(|| reject("Ungültige url"))?)
+        }
+    };
+    let state = app.state::<AppState>();
+    let g = state.lock();
+    let v = available(&g)?;
+    let not_found = || reject("Eintrag nicht gefunden oder nicht für KI-Assistenten freigegeben");
+    let e = v.data.entries.iter().find(|e| e.id == req.entry_id).ok_or_else(not_found)?;
+    let policy = e.agent.as_ref().filter(|a| a.enabled).ok_or_else(not_found)?;
+    if !policy.fill_login {
+        return Err(reject("Für diesen Eintrag ist das Ausfüllen im Browser nicht freigegeben"));
+    }
+    if let Some(h) = &hint {
+        if !policy.allows_host(h) {
+            return Err(reject(&format!(
+                "Host {h} ist für diesen Eintrag nicht freigegeben (erlaubt: {})",
+                policy.hosts.join(", ")
+            )));
+        }
+    }
+    if e.password.is_empty() {
+        return Err(reject("Für diesen Eintrag ist kein Passwort hinterlegt"));
+    }
+    Ok((e.title.clone(), policy.hosts.clone(), hint, policy.session_minutes))
+}
+
+fn fill_login(app: &AppHandle, req: &FillLogin) -> Response {
+    const TOOL: &str = "fill_login";
+    let (title, hosts, hint, session_minutes) = match check_fill(app, req) {
+        Ok(x) => x,
+        Err((msg, outcome)) => {
+            log(app, TOOL, msg.clone(), outcome);
+            return Err(msg);
+        }
+    };
+    let target = hint.clone().unwrap_or_else(|| hosts.join(", "));
+    let detail = format!("{target} · {title}");
+    if browser::connected().is_empty() {
+        log(app, TOOL, format!("{detail} · keine Browser-Erweiterung verbunden"), Outcome::Failed);
+        return Err(browser::NOT_CONNECTED.into());
+    }
+
+    let pending = Pending {
+        id: 0,
+        action: "fill".into(),
+        entry_title: title.clone(),
+        method: "LOGIN".into(),
+        host: target.clone(),
+        path: String::new(),
+        auth: "password".into(),
+        session_minutes,
+        expires_at: 0,
+    };
+    let key = (req.entry_id.clone(), target.clone(), "fill".to_string());
+    let approval_note = confirm(app, TOOL, pending, key, &detail)?;
+
+    // Nach der Bestätigung erneut prüfen und erst dann die Zugangsdaten lesen.
+    let creds = check_fill(app, req).and_then(|(_, hosts_now, _, _)| {
+        if hosts_now != hosts {
+            return Err(("Die Freigabe wurde während der Bestätigung geändert".to_string(), Outcome::Rejected));
+        }
+        let state = app.state::<AppState>();
+        let g = state.lock();
+        let v = available(&g)?;
+        let e = v.data.entries.iter().find(|e| e.id == req.entry_id).ok_or_else(|| {
+            ("Eintrag nicht gefunden".to_string(), Outcome::Rejected)
+        })?;
+        Ok((zeroize::Zeroizing::new(e.username.clone()), zeroize::Zeroizing::new(e.password.clone())))
+    });
+    let (username, password) = match creds {
+        Ok(c) => c,
+        Err((msg, outcome)) => {
+            log(app, TOOL, format!("{detail} · {msg}"), outcome);
+            return Err(msg);
+        }
+    };
+    let result = browser::fill(&hosts, hint.as_deref(), &username, &password);
+    drop((username, password));
+    match result {
+        Ok(v) => {
+            let filled = v["filled"].as_array().map(|a| a.iter().filter_map(Value::as_str).collect::<Vec<_>>().join("+"));
+            let page = v["host"].as_str().unwrap_or_default();
+            log(
+                app,
+                TOOL,
+                format!("{detail} · {page} · {} · {approval_note}", filled.unwrap_or_default()),
+                Outcome::Ok,
+            );
             Ok(v)
         }
         Err(msg) => {
@@ -256,6 +387,7 @@ fn visible_entries(data: &VaultData, query: Option<&str>) -> Vec<AgentEntry> {
                 username: e.username.clone(),
                 hosts: policy.hosts.clone(),
                 auth: policy.auth.iter().map(|a| a.key()).collect(),
+                fill_login: policy.fill_login,
                 secret: http::SecretSource::for_entry(e).map(|s| s.key().to_string()),
                 has_totp: e.totp.is_some(),
             })
@@ -272,8 +404,9 @@ pub fn spawn(app: AppHandle, dir: &Path) {
     use std::time::Duration;
 
     let _ = LOG_PATH.set(dir.join(LOG_FILE));
+    let _ = DATA_DIR.set(dir.to_path_buf());
     let Ok(exe) = std::env::current_exe() else { return };
-    let expected = exe.with_file_name(rk_agent::BRIDGE_EXE);
+    let Some(app_dir) = exe.parent().map(Path::to_path_buf) else { return };
 
     thread::spawn(move || {
         let mut first = true;
@@ -296,16 +429,30 @@ pub fn spawn(app: AppHandle, dir: &Path) {
                 continue;
             }
             let app = app.clone();
-            let expected = expected.clone();
-            thread::spawn(move || serve(&app, pipe, &expected));
+            let app_dir = app_dir.clone();
+            thread::spawn(move || serve(&app, pipe, &app_dir));
         }
     });
 }
 
 #[cfg(windows)]
-fn serve(app: &AppHandle, mut pipe: rk_agent::pipe::Pipe, expected: &Path) {
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Client {
+    /// MCP-Brücke: Tool-Aufrufe der KI.
+    Bridge,
+    /// Native-Messaging-Host der Browser-Erweiterung.
+    Browser,
+}
+
+#[cfg(windows)]
+fn serve(app: &AppHandle, mut pipe: rk_agent::pipe::Pipe, app_dir: &Path) {
     let client = pipe.peer_image();
-    if !client.as_ref().is_ok_and(|p| rk_agent::same_path(p, expected)) {
+    let role = match &client {
+        Ok(p) if rk_agent::same_path(p, &app_dir.join(rk_agent::BRIDGE_EXE)) => Some(Client::Bridge),
+        Ok(p) if rk_agent::same_path(p, &app_dir.join(rk_agent::BROWSER_HOST_EXE)) => Some(Client::Browser),
+        _ => None,
+    };
+    let Some(role) = role else {
         let who = client.map(|p| p.display().to_string()).unwrap_or_else(|_| "unbekannt".into());
         log(app, "verbindung", format!("Nicht zugelassener Client: {who}"), Outcome::Rejected);
         // Erst die Anfrage abnehmen: Beide Seiten flushen nach dem Schreiben, und
@@ -314,15 +461,31 @@ fn serve(app: &AppHandle, mut pipe: rk_agent::pipe::Pipe, expected: &Path) {
         let _ = rk_agent::read_message::<serde_json::Value>(&mut pipe);
         let _ = rk_agent::write_message(&mut pipe, &Response::Err("Nicht zugelassener Client".into()));
         return;
-    }
+    };
     let Ok(req) = rk_agent::read_message::<Request>(&mut pipe) else { return };
-    let resp = handle(app, req);
+    let resp = match (role, req) {
+        (Client::Browser, Request::RegisterBrowser { browser }) => {
+            log(app, "browser", format!("{browser} verbunden"), Outcome::Ok);
+            // Verbindung bleibt offen und gehört ab jetzt `browser`; keine Antwort.
+            browser::register(browser, pipe);
+            return;
+        }
+        (Client::Browser, Request::BrowserResult { id, result }) => {
+            browser::deliver(id, result);
+            Ok(serde_json::Value::Null)
+        }
+        (Client::Bridge, req @ (Request::ListEntries { .. } | Request::HttpRequest(_) | Request::FillLogin(_))) => {
+            handle(app, req)
+        }
+        _ => Err("Anfrage für diesen Client nicht erlaubt".into()),
+    };
     let _ = rk_agent::write_message(&mut pipe, &resp);
 }
 
 #[cfg(not(windows))]
 pub fn spawn(_app: AppHandle, dir: &Path) {
     let _ = LOG_PATH.set(dir.join(LOG_FILE));
+    let _ = DATA_DIR.set(dir.to_path_buf());
 }
 
 #[cfg(test)]

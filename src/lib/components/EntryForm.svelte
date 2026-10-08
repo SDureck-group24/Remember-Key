@@ -46,6 +46,7 @@
   let authHeader = $state(false);
   let authHeaderName = $state("");
   let sessionMinutes = $state(0);
+  let fillLogin = $state(false);
   let form = $state<Omit<EntryInput, "password" | "apiToken" | "agent">>({
     id: null,
     title: "",
@@ -86,6 +87,7 @@
           authHeaderName = header?.kind === "header" ? header.name : "";
         }
         sessionMinutes = d.agent.sessionMinutes;
+        fillLogin = d.agent.fillLogin;
       } catch (e) {
         error = errorText(e);
       }
@@ -145,6 +147,7 @@
         hosts: agentHosts.split(/[\s,;]+/).filter(Boolean),
         auth,
         sessionMinutes: Number(sessionMinutes) || 0,
+        fillLogin,
       };
       onsaved(
         await api.save({
@@ -291,6 +294,13 @@
           aria-label="Erlaubte Hosts"
           placeholder="Leer = Host der Website, z. B. api.github.com, *.example.com"
         />
+
+        <span class="lbl sub">Login im Browser</span>
+        <div class="seg">
+          <label class="seg-opt" title="Die Remember-Key-Erweiterung füllt Benutzername und Passwort aus und sendet ab">
+            <input type="checkbox" bind:checked={fillLogin} /> Login-Formular ausfüllen lassen
+          </label>
+        </div>
 
         <span class="lbl sub">Passwort in HTTPS-Anfragen einsetzen</span>
         <div class="seg">

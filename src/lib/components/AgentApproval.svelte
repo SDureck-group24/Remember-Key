@@ -77,13 +77,27 @@
 
       <div class="dialog-body" id="appr-body">
         <p>Ein KI-Assistent möchte die Zugangsdaten von <strong>{current.entryTitle}</strong> verwenden:</p>
-        <dl>
-          <dt>Anfrage</dt>
-          <dd class="mono">{current.method} {current.host}{current.path}</dd>
-          <dt>Passwort</dt>
-          <dd>wird {authText(current.auth)} eingesetzt</dd>
-        </dl>
-        <p class="hint">Die KI sieht das Passwort nicht; es wird auch aus der Antwort entfernt.</p>
+        {#if current.action === "fill"}
+          <dl>
+            <dt>Aktion</dt>
+            <dd>Login im Browser ausfüllen und absenden</dd>
+            <dt>Seite</dt>
+            <dd class="mono">{current.host}</dd>
+          </dl>
+          <p class="hint">
+            Die Remember-Key-Erweiterung füllt nur auf dieser Seite aus. Die KI sieht das Passwort nicht. Steuert sie den
+            Browser, könnte sie das Feld vor dem Absenden aber technisch auslesen – erlaube das nur, wenn du die Anfrage
+            erwartest.
+          </p>
+        {:else}
+          <dl>
+            <dt>Anfrage</dt>
+            <dd class="mono">{current.method} {current.host}{current.path}</dd>
+            <dt>Passwort</dt>
+            <dd>wird {authText(current.auth)} eingesetzt</dd>
+          </dl>
+          <p class="hint">Die KI sieht das Passwort nicht; es wird auch aus der Antwort entfernt.</p>
+        {/if}
       </div>
 
       {#if queue.length > 1}<p class="hint">Weitere wartende Anfragen: {queue.length - 1}</p>{/if}
@@ -105,8 +119,8 @@
       </div>
       {#if current.sessionMinutes > 0}
         <p class="hint">
-          „Für {current.sessionMinutes} Min.“ gilt für alle Anfragen an {current.host} mit diesem Eintrag, bis der Tresor
-          gesperrt wird.
+          „Für {current.sessionMinutes} Min.“ gilt für alle {current.action === "fill" ? "Logins auf" : "Anfragen an"}
+          {current.host} mit diesem Eintrag, bis der Tresor gesperrt wird.
         </p>
       {/if}
     </div>

@@ -29,7 +29,8 @@
   "bundle": {
     "active": true,
     "targets": ["nsis"],
-    "externalBin": ["binaries/remember-key-mcp"],
+    "externalBin": ["binaries/remember-key-mcp", "binaries/remember-key-browser"],
+    "resources": { "../extension/": "extension/" },
     "publisher": "Simon Dureck",
     "copyright": "© 2026 Simon Dureck",
     "category": "Utility",

@@ -18,6 +18,18 @@ pub const MAX_MESSAGE: usize = 1024 * 1024;
 /// Dateiname der Brücke; liegt im selben Verzeichnis wie die App.
 pub const BRIDGE_EXE: &str = "remember-key-mcp.exe";
 
+/// Native-Messaging-Host für die Browser-Erweiterung; liegt ebenfalls neben der App.
+pub const BROWSER_HOST_EXE: &str = "remember-key-browser.exe";
+
+/// Name des Native-Messaging-Hosts (Registry und Erweiterung).
+pub const NATIVE_HOST_NAME: &str = "com.rememberkey.browser";
+
+/// ID der Erweiterung in Chrome/Edge (aus dem `key` in extension/manifest.json abgeleitet).
+pub const CHROME_EXTENSION_ID: &str = "hiakhacjfkmcfnbalgiplidknigomhaf";
+
+/// ID der Erweiterung in Firefox/Zen (`browser_specific_settings.gecko.id`).
+pub const GECKO_EXTENSION_ID: &str = "remember-key@rememberkey.app";
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum Request {
@@ -26,6 +38,38 @@ pub enum Request {
         query: Option<String>,
     },
     HttpRequest(HttpRequest),
+    FillLogin(FillLogin),
+    /// Der Native-Messaging-Host meldet einen Browser an und hält die Verbindung offen;
+    /// darüber schickt die App anschließend `BrowserCommand`s.
+    RegisterBrowser { browser: String },
+    /// Ergebnis der Erweiterung zu einem `BrowserCommand`.
+    BrowserResult { id: u64, result: Response },
+}
+
+/// Login im Browser ausfüllen und absenden lassen.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FillLogin {
+    pub entry_id: String,
+    /// Optional: Adresse oder Host des Tabs, falls mehrere passende Tabs offen sind.
+    #[serde(default)]
+    pub url: Option<String>,
+}
+
+/// Befehl der App an die Browser-Erweiterung (über den Native-Messaging-Host).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum BrowserCommand {
+    #[serde(rename_all = "camelCase")]
+    Fill {
+        id: u64,
+        /// Hosts der Freigabe; die Erweiterung füllt nur auf passenden Seiten aus.
+        hosts: Vec<String>,
+        /// Nur Tabs mit genau diesem Host (aus `FillLogin::url`).
+        host_hint: Option<String>,
+        username: String,
+        password: String,
+    },
 }
 
 /// HTTPS-Anfrage, in die die App die Zugangsdaten eines Eintrags selbst einsetzt.
@@ -63,6 +107,8 @@ pub struct AgentEntry {
     pub hosts: Vec<String>,
     /// Erlaubte Einsetz-Stellen für `http_request` (`bearer`, `basic`, `header:<Name>`).
     pub auth: Vec<String>,
+    /// Login darf per Browser-Erweiterung ausgefüllt werden (`fill_login`).
+    pub fill_login: bool,
     /// Was eingesetzt wird: `apiToken` (hat Vorrang) oder `password`; `None` = nichts hinterlegt.
     pub secret: Option<String>,
     pub has_totp: bool,
@@ -122,7 +168,7 @@ pub mod pipe {
     };
     use windows_sys::Win32::System::Pipes::{
         ConnectNamedPipe, CreateNamedPipeW, DisconnectNamedPipe, GetNamedPipeClientProcessId,
-        GetNamedPipeServerProcessId, WaitNamedPipeW, PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE,
+        GetNamedPipeServerProcessId, PeekNamedPipe, WaitNamedPipeW, PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE,
         PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
     };
     use windows_sys::Win32::System::Threading::{
@@ -287,6 +333,13 @@ pub mod pipe {
             Err(io::Error::new(io::ErrorKind::TimedOut, "Pipe ist belegt"))
         }
 
+        /// Ist die Gegenstelle noch verbunden? Liest nichts aus der Pipe.
+        pub fn is_alive(&self) -> bool {
+            unsafe {
+                PeekNamedPipe(self.handle, ptr::null_mut(), 0, ptr::null_mut(), ptr::null_mut(), ptr::null_mut()) != 0
+            }
+        }
+
         /// Programm am anderen Ende der Verbindung.
         pub fn peer_image(&self) -> io::Result<PathBuf> {
             let mut pid = 0u32;
@@ -301,6 +354,18 @@ pub mod pipe {
                 return Err(last_error());
             }
             process_image(pid)
+        }
+    }
+
+    /// Verbindet sich mit der App und prüft, dass sie aus demselben Verzeichnis stammt wie
+    /// dieses Programm (Schutz vor einem fremden Prozess, der den Pipe-Namen belegt).
+    pub fn connect_to_app() -> Result<Pipe, String> {
+        let pipe = Pipe::connect().map_err(|_| "Remember Key läuft nicht. Bitte die App starten.".to_string())?;
+        let ours = std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.to_path_buf()));
+        let theirs = pipe.peer_image().ok().and_then(|p| p.parent().map(|d| d.to_path_buf()));
+        match (ours, theirs) {
+            (Some(a), Some(b)) if crate::same_path(&a, &b) => Ok(pipe),
+            _ => Err("Die Gegenstelle ist nicht Remember Key. Verbindung abgebrochen.".into()),
         }
     }
 
@@ -380,6 +445,25 @@ mod tests {
         let Request::HttpRequest(r) = req else { panic!() };
         assert_eq!(r.method, "GET");
         assert!(r.headers.is_empty() && r.body.is_none() && r.auth.is_none());
+    }
+
+    #[test]
+    fn browser_messages() {
+        let cmd = BrowserCommand::Fill {
+            id: 7,
+            hosts: vec!["x.de".into()],
+            host_hint: None,
+            username: "u".into(),
+            password: "p".into(),
+        };
+        let json = serde_json::to_value(&cmd).unwrap();
+        assert_eq!(json["type"], "fill");
+        assert_eq!(json["hostHint"], serde_json::Value::Null);
+        let req: Request =
+            serde_json::from_str(r#"{"op":"browser_result","id":7,"result":{"Err":"kein Tab"}}"#).unwrap();
+        assert!(matches!(req, Request::BrowserResult { id: 7, result: Err(_) }));
+        let req: Request = serde_json::from_str(r#"{"op":"fill_login","entryId":"1"}"#).unwrap();
+        assert!(matches!(req, Request::FillLogin(FillLogin { url: None, .. })));
     }
 
     #[test]

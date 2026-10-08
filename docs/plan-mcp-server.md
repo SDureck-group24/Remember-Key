@@ -84,7 +84,7 @@ Host, Entscheidung und Client. Die Datei wird auf 1000 Zeilen begrenzt.
 |---|---|---|---|
 | `list_entries` | `query?` | `id`, `title`, `username`, `hosts`, `auth`, `hasTotp` (nur freigegebene Einträge) | nicht berührt |
 | `http_request` | `entry_id`, `url`, `method?`, `headers?`, `body?`, `auth?` | Status, Header und Body, bereinigt | vom Backend in den Request gesetzt (ureq) |
-| `fill_login` (Phase 3) | `entry_id` | `ok` / Fehler | vom Backend ins Zielfenster getippt |
+| `fill_login` | `entry_id`, `url?` | Host, Titel, ausgefüllte Felder, abgesendet | von der Browser-Erweiterung in den passenden Tab gefüllt und sofort abgesendet |
 
 Regeln für `http_request`:
 
@@ -157,8 +157,26 @@ claude mcp add remember-key -- "%LOCALAPPDATA%\Remember Key\remember-key-mcp.exe
    - Host- und Location-Policy, keine Redirects, Bereinigung.
    - Bestätigungsdialog mit Countdown und Sitzungsfreigaben, UI im Eintrag.
    - Nach der Bestätigung wird die Freigabe erneut geprüft, bevor das Passwort gelesen wird.
-3. **`fill_login`** per WebExtension (Manifest V3) für Zen/Firefox und Chrome mit Native Messaging zur App.
-   Hintergrund: siehe `docs/beobachtungen-ki-test-2026-10-08.md`, Abschnitt 2.4.
+3. **`fill_login`** per WebExtension (Manifest V3) für Zen/Firefox und Chrome mit Native Messaging zur App –
+   umgesetzt. Hintergrund: siehe `docs/beobachtungen-ki-test-2026-10-08.md`, Abschnitt 2.4.
+   - Erweiterung in `extension/`. Sie läuft unverändert in Chrome/Edge (Service Worker) und Firefox/Zen
+     (Hintergrundskript). Die feste Chrome-ID ergibt sich aus dem `key` im Manifest, die Gecko-ID ist
+     `remember-key@rememberkey.app`.
+   - Native-Messaging-Host `remember-key-browser.exe` (zweites Programm in `rk-agent`). Er meldet den
+     Browser mit `RegisterBrowser` an und hält diese Verbindung für Befehle der App offen. Ergebnisse
+     schickt er über eigene, kurze Verbindungen zurück, weil synchrone Pipe-Handles Lesen und Schreiben
+     serialisieren.
+   - Die App akzeptiert auf der Pipe die Brücke nur mit KI-Anfragen und den Host nur mit
+     Browser-Nachrichten.
+   - Registrierung unter HKCU für Chrome, Edge und Mozilla (gilt auch für Zen), sobald der KI-Zugriff
+     eingeschaltet bzw. der Tresor entsperrt wird. Die Manifeste liegen unter
+     `%APPDATA%\com.rememberkey.app\native\`.
+   - Eigene Freigabe pro Eintrag (`fill_login`) und eigener Bestätigungsdialog. Die Erweiterung wählt
+     den passenden Tab (https bzw. http nur für Loopback, Host der Freigabe, aktiv bzw. zuletzt benutzt)
+     und prüft den Host in der Seite noch einmal. Sie füllt nur sichtbare Felder im Hauptframe und
+     sendet sofort ab. Zweistufige Logins brauchen pro Schritt einen Aufruf.
+   - Grenzen: Login-Formulare in iframes werden nicht ausgefüllt. In Zen/Firefox ist die Erweiterung
+     ohne Signatur nur temporär ladbar (`about:debugging`).
 4. **Härtung**
    - Windows Hello.
    - `FormField` als Einsetz-Stelle, TOTP-Einsetzen.
@@ -190,7 +208,9 @@ claude mcp add remember-key -- "%LOCALAPPDATA%\Remember Key\remember-key-mcp.exe
 | Ziel-API spiegelt Header zurück | Bereinigung der Antwort inkl. Kodierungen |
 | Anderer Prozess spricht die Pipe an | DACL nur Benutzer, Prüfung des Client-Pfads, Dialog zeigt Client |
 | Malware mit Benutzerrechten | Nicht vollständig abwehrbar (gilt auch heute); Dialog + Hello erschweren Missbrauch |
-| KI steuert Browser und liest Feld per JS aus | `fill_login` erst mit Mechanismus außerhalb der KI-Reichweite (Phase 3) |
+| KI steuert Browser und liest Feld per JS aus | Nicht vollständig abwehrbar. Die Erweiterung sendet sofort ab, und der Dialog weist auf das Risiko hin. Die Tool-Beschreibung verbietet das Auslesen. |
+| Erweiterung füllt auf falscher Seite aus | Tab-Auswahl und Prüfung in der Seite gegen die Hosts der Freigabe, nur https bzw. http für Loopback |
+| Fremde Erweiterung spricht den Host an | Native-Messaging-Manifest erlaubt nur unsere Erweiterungs-ID; der Host darf in der App nur Browser-Nachrichten senden |
 
 ## 10. Offene Entscheidungen
 

@@ -88,6 +88,36 @@
     {:else}
       <p class="error"><Icon name="warning-circle" size={16} /> Die MCP-Brücke (remember-key-mcp.exe) fehlt neben der App.</p>
     {/if}
+
+    <div class="field">
+      <span class="lbl">Browser-Erweiterung (Login ausfüllen)</span>
+      {#if info.browsers.length}
+        <p><span class="tag tag-accent">Verbunden</span> {info.browsers.join(", ")}</p>
+      {:else}
+        <p class="hint">Nicht verbunden. Die Erweiterung verbindet sich innerhalb von 30 s, sobald der Browser läuft.</p>
+      {/if}
+      {#if info.extensionDir}
+        <div class="row">
+          <code class="cmd grow">{info.extensionDir}</code>
+          <button type="button" class="btn btn-icon btn-sm" title="Pfad kopieren" aria-label="Pfad kopieren" onclick={() => copy(info!.extensionDir!, "Pfad kopiert")}>
+            <Icon name="copy" size={15} />
+          </button>
+        </div>
+        <ul class="steps hint">
+          <li>
+            <strong>Chrome/Edge:</strong> <span class="mono">chrome://extensions</span> öffnen, „Entwicklermodus“ einschalten,
+            „Entpackte Erweiterung laden“ und diesen Ordner wählen.
+          </li>
+          <li>
+            <strong>Zen/Firefox:</strong> <span class="mono">about:debugging#/runtime/this-firefox</span> → „Temporäres Add-on
+            laden“ → <span class="mono">manifest.json</span> aus dem Ordner. Gilt bis zum Neustart des Browsers; danach unter
+            Add-ons den Zugriff auf alle Websites erlauben.
+          </li>
+        </ul>
+      {:else}
+        <p class="error"><Icon name="warning-circle" size={16} /> Der Ordner der Erweiterung fehlt neben der App.</p>
+      {/if}
+    </div>
   {/if}
 
   <div class="field">
@@ -126,6 +156,13 @@
     border-radius: var(--radius-md);
     background: color-mix(in srgb, var(--color-text) 6%, transparent);
     overflow-wrap: anywhere;
+  }
+  .steps {
+    margin: var(--space-2) 0 0;
+    padding-left: var(--space-6);
+  }
+  .steps li + li {
+    margin-top: var(--space-1);
   }
   .log {
     list-style: none;

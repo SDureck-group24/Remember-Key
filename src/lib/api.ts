@@ -29,6 +29,8 @@ export interface AgentPolicy {
   auth: AuthLocation[];
   /** 0 = jede Anfrage einzeln bestätigen. */
   sessionMinutes: number;
+  /** Login darf von der Browser-Erweiterung ausgefüllt werden. */
+  fillLogin: boolean;
 }
 
 export const MAX_SESSION_MINUTES = 60;
@@ -97,6 +99,8 @@ export type AgentOutcome = "ok" | "locked" | "disabled" | "rejected" | "denied" 
 /** Anfrage der KI, die auf Bestätigung wartet. */
 export interface PendingApproval {
   id: number;
+  /** `http` = Anfrage mit eingesetztem Geheimnis, `fill` = Login im Browser. */
+  action: "http" | "fill";
   entryTitle: string;
   method: string;
   host: string;
@@ -121,6 +125,11 @@ export interface AgentLogEntry {
 export interface AgentInfo {
   /** Pfad der MCP-Brücke; `null`, wenn sie nicht neben der App liegt. */
   bridgePath: string | null;
+  /** Verbundene Browser-Erweiterungen, z. B. „Chrome“. */
+  browsers: string[];
+  /** Ordner der Erweiterung zum Laden als entpackte Erweiterung. */
+  extensionDir: string | null;
+  extensionId: string;
   log: AgentLogEntry[];
 }
 

@@ -124,6 +124,13 @@ pub struct AgentPolicy {
     /// 0 = jede Nutzung einzeln bestätigen; sonst darf eine Freigabe so viele Minuten gelten.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub session_minutes: u32,
+    /// Login darf von der Browser-Erweiterung ausgefüllt werden (`fill_login`).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub fill_login: bool,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 fn is_zero(n: &u32) -> bool {

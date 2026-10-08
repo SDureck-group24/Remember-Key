@@ -255,9 +255,13 @@ async fn unlock(app: AppHandle, state: State<'_, AppState>, password: String) ->
     if upgraded {
         v.upgrade_kdf(&password, now())?;
     }
+    let agent_enabled = v.data.settings.agent_enabled;
     let mut g = state.lock();
     g.vault = Some(v);
     g.touch();
+    if agent_enabled {
+        agent::register_browser_host();
+    }
     if upgraded {
         g.persist()?;
         delete_backups(&path);
@@ -453,7 +457,13 @@ fn agent_policy(input: &AgentPolicy, url: &str) -> Result<Option<AgentPolicy>> {
         )));
     }
     let keep = input.enabled || !hosts.is_empty();
-    Ok(keep.then_some(AgentPolicy { enabled: input.enabled, hosts, auth, session_minutes: input.session_minutes }))
+    Ok(keep.then_some(AgentPolicy {
+        enabled: input.enabled,
+        hosts,
+        auth,
+        session_minutes: input.session_minutes,
+        fill_login: input.fill_login,
+    }))
 }
 
 #[tauri::command]
@@ -585,6 +595,9 @@ fn get_settings(state: State<'_, AppState>) -> Result<Settings> {
 fn set_settings(state: State<'_, AppState>, mut settings: Settings) -> Result<()> {
     settings.validate()?;
     settings.updated_at = now();
+    if settings.agent_enabled {
+        agent::register_browser_host();
+    }
     let mut g = state.lock();
     g.vault()?.data.settings = settings;
     g.persist()
@@ -597,14 +610,29 @@ fn set_settings(state: State<'_, AppState>, mut settings: Settings) -> Result<()
 struct AgentInfo {
     /// Pfad der MCP-Brücke; `None`, wenn sie nicht neben der App liegt.
     bridge_path: Option<String>,
+    /// Verbundene Browser-Erweiterungen.
+    browsers: Vec<String>,
+    /// Ordner der Erweiterung zum Laden als „entpackte Erweiterung“.
+    extension_dir: Option<String>,
+    extension_id: &'static str,
     log: Vec<agent::LogEntry>,
 }
 
 #[tauri::command]
-fn agent_info(state: State<'_, AppState>) -> Result<AgentInfo> {
+fn agent_info(app: AppHandle, state: State<'_, AppState>) -> Result<AgentInfo> {
     state.lock().vault()?;
+    let extension_dir = app
+        .path()
+        .resource_dir()
+        .ok()
+        .map(|d| d.join("extension"))
+        .filter(|d| d.join("manifest.json").exists())
+        .map(|d| d.display().to_string());
     Ok(AgentInfo {
         bridge_path: agent::bridge_path().map(|p| p.display().to_string()),
+        browsers: agent::browsers(),
+        extension_dir,
+        extension_id: rk_agent::CHROME_EXTENSION_ID,
         log: agent::read_log(200),
     })
 }

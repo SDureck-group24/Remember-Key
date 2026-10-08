@@ -182,9 +182,10 @@
               · Einsetzen als {detail.agent.auth
                 .map((a) => (a.kind === "bearer" ? "Bearer-Token" : a.kind === "basic" ? "Basic-Auth" : `Header ${a.name}`))
                 .join(", ")}
-            {:else}
+            {:else if !detail.agent.fillLogin}
               · nur Auflisten
             {/if}
+            {#if detail.agent.fillLogin}· Login im Browser{/if}
           </span>
         </dd>
       {/if}

@@ -1,0 +1,32 @@
+{
+  "manifest_version": 3,
+  "name": "Remember Key",
+  "version": "0.1.0",
+  "description": "Füllt Logins für KI-Assistenten aus – erst nach deiner Bestätigung in Remember Key. Die KI sieht das Passwort nie.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAmqHswbNNLxlZmW85VZ3v5qWcdY5yYgCE0UyvaMJ6dZnUFEGt53GlcGrI2A6jRUpH9iTZ+lIlZTb7TCy+F2zF7VueLeb6f2GUhUvd6oIOntXScEHTxOKISUrQAWaXhmP0n7EDSBttRsMK/1wbU0ycQNtqr5omQ9PSHIVDCOGbcLOx1c9nMTJjQgqmGOuUWOAhEtJP5yOuNmCNTbhDwr8q3Fy6wAwZnfhCsuNb2LXW4FYjmEiecGDVIvjcYJnDVXu7CWS79VlMn62+TlzI9M73dbwFI55Kjl0MJte3VRT7qwQcAj7JJ6DvrXeU8cp1BFZv/yT6AKqdEK7aBaiYDFX8HQIDAQAB",
+  "permissions": [
+    "nativeMessaging",
+    "scripting",
+    "tabs",
+    "alarms"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "scripts": [
+      "background.js"
+    ]
+  },
+  "icons": {
+    "32": "icons/32.png",
+    "128": "icons/128.png"
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "remember-key@rememberkey.app",
+      "strict_min_version": "128.0"
+    }
+  }
+}

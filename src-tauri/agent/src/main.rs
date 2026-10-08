@@ -8,7 +8,7 @@ use std::io::{self, BufRead, Write};
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use rk_agent::{HttpRequest, Request};
+use rk_agent::{FillLogin, HttpRequest, Request};
 use serde_json::{json, Value};
 
 const PROTOCOL_VERSIONS: [&str; 3] = ["2025-06-18", "2025-03-26", "2024-11-05"];
@@ -129,6 +129,24 @@ fn tools() -> Value {
                 "additionalProperties": false
             },
             "annotations": { "readOnlyHint": false, "destructiveHint": true, "openWorldHint": true }
+        },
+        {
+            "name": "fill_login",
+            "title": "Login im Browser ausfüllen",
+            "description": "Lässt Remember Key über seine Browser-Erweiterung das Login-Formular im offenen Tab                 ausfüllen und absenden – Benutzername und Passwort eines freigegebenen Eintrags (fillLogin in                 list_entries). Du siehst das Passwort nie und gibst es auch nicht selbst ein. Öffne vorher die                 Login-Seite; sie muss zu den Hosts des Eintrags passen. Der Nutzer bestätigt in Remember Key (bis zu                 60 Sekunden). Bei zweistufigen Logins (erst Benutzername, dann Passwort) einfach erneut aufrufen,                 sobald das Passwortfeld angezeigt wird. Lies das Passwortfeld danach nicht aus.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "entry_id": { "type": "string", "description": "ID des Eintrags aus list_entries." },
+                    "url": {
+                        "type": "string",
+                        "description": "Optional: Adresse der geöffneten Login-Seite, falls mehrere passende Tabs offen sind."
+                    }
+                },
+                "required": ["entry_id"],
+                "additionalProperties": false
+            },
+            "annotations": { "readOnlyHint": false, "destructiveHint": false, "openWorldHint": true }
         }
     ])
 }
@@ -144,6 +162,13 @@ fn call_tool(params: &Value) -> Value {
             Ok(r) => Request::HttpRequest(r),
             Err(e) => return tool_result(Err(e)),
         },
+        "fill_login" => match args.get("entry_id").and_then(Value::as_str) {
+            Some(id) => Request::FillLogin(FillLogin {
+                entry_id: id.to_string(),
+                url: args.get("url").and_then(Value::as_str).map(str::to_string).filter(|u| !u.trim().is_empty()),
+            }),
+            None => return tool_result(Err("entry_id fehlt".into())),
+        },
         _ => return tool_result(Err(format!("Unbekanntes Tool: {name}"))),
     };
     tool_result(send(request))
@@ -155,6 +180,10 @@ fn timeout_for(request: &Request) -> Duration {
     match request {
         Request::ListEntries { .. } => Duration::from_secs(15),
         Request::HttpRequest(_) => Duration::from_secs(120),
+        // Bestätigung (60 s) und Ausfüllen in der Erweiterung (15 s), plus Reserve.
+        Request::FillLogin(_) => Duration::from_secs(100),
+        // Werden von der Brücke nie gesendet.
+        Request::RegisterBrowser { .. } | Request::BrowserResult { .. } => Duration::from_secs(15),
     }
 }
 
@@ -219,17 +248,7 @@ fn send(request: Request) -> rk_agent::Response {
 
 #[cfg(windows)]
 fn exchange(request: &Request) -> rk_agent::Response {
-    use rk_agent::pipe::Pipe;
-
-    let mut pipe = Pipe::connect().map_err(|_| "Remember Key läuft nicht. Bitte die App starten.".to_string())?;
-    // Nur mit der App aus dem eigenen Installationsverzeichnis sprechen (Schutz vor
-    // einem fremden Prozess, der den Pipe-Namen belegt).
-    let ours = std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.to_path_buf()));
-    let theirs = pipe.peer_image().ok().and_then(|p| p.parent().map(|d| d.to_path_buf()));
-    match (ours, theirs) {
-        (Some(a), Some(b)) if rk_agent::same_path(&a, &b) => {}
-        _ => return Err("Die Gegenstelle ist nicht Remember Key. Verbindung abgebrochen.".into()),
-    }
+    let mut pipe = rk_agent::pipe::connect_to_app()?;
     rk_agent::write_message(&mut pipe, request).map_err(|e| format!("Senden fehlgeschlagen: {e}"))?;
     rk_agent::read_message(&mut pipe).map_err(|e| format!("Keine Antwort von Remember Key: {e}"))?
 }
@@ -274,7 +293,7 @@ mod tests {
     fn tools_list_names() {
         let r = handle(&json!({ "jsonrpc": "2.0", "id": 5, "method": "tools/list" })).unwrap();
         let names: Vec<&str> = r["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
-        assert_eq!(names, ["list_entries", "http_request"]);
+        assert_eq!(names, ["list_entries", "http_request", "fill_login"]);
     }
 
     #[test]
