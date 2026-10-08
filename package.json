@@ -8,6 +8,7 @@
     "build": "vite build",
     "build:bridge": "node scripts/build-bridge.mjs",
     "sign:firefox": "node scripts/sign-firefox.mjs",
+    "pack:firefox": "node scripts/sign-firefox.mjs --pack",
     "preview": "vite preview",
     "prepare": "svelte-kit sync || echo ''",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",

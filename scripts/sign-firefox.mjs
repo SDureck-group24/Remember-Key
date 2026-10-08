@@ -8,6 +8,8 @@
 //   WEB_EXT_API_KEY=…  WEB_EXT_API_SECRET=…  npm run sign:firefox
 //
 // Ohne Schlüssel (oder mit --no-sign) wird nur der Ordner dist/extension-firefox erzeugt.
+// Mit --pack entsteht dist/remember-key-<version>.xpi zum Hochladen auf addons.mozilla.org
+// (Entwickler-Hub → „Neues Add-on einreichen“); Mozilla prüft und signiert sie dann.
 // Vor jedem neuen Signieren die Version in extension/manifest.json erhöhen.
 import { execSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -34,6 +36,17 @@ console.log(`Firefox-Fassung ${manifest.version} in ${out}`);
 
 const { WEB_EXT_API_KEY, WEB_EXT_API_SECRET } = process.env;
 if (process.argv.includes("--no-sign")) process.exit(0);
+if (process.argv.includes("--pack")) {
+  // Prüfen (Fehler brechen ab) und als .xpi verpacken – Pfade im Archiv mit „/“, wie AMO es verlangt.
+  execSync(`npx --yes web-ext@8 lint --source-dir "${out}"`, { stdio: "inherit" });
+  const file = `remember-key-${manifest.version}.xpi`;
+  execSync(
+    `npx --yes web-ext@8 build --source-dir "${out}" --artifacts-dir "${dist}" --filename "${file}" --overwrite-dest`,
+    { stdio: "inherit" },
+  );
+  console.log(`Zum Hochladen: ${join(dist, file)}`);
+  process.exit(0);
+}
 if (!WEB_EXT_API_KEY || !WEB_EXT_API_SECRET) {
   console.error(
     "Zum Signieren WEB_EXT_API_KEY und WEB_EXT_API_SECRET setzen " +
