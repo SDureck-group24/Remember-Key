@@ -33,6 +33,26 @@ struct Inner {
     /// Sequenznummer der Zwischenablage nach unserem letzten Kopieren.
     clipboard_seq: Option<u32>,
     sync_tx: Sender<sync::Msg>,
+    hello: HelloUnlock,
+}
+
+/// Entsperren mit Windows Hello – nur im Arbeitsspeicher, nach App-Neustart ist
+/// wieder das Master-Passwort nötig.
+#[derive(Default)]
+struct HelloUnlock {
+    /// Öffentlicher Teil des Windows-Hello-Schlüssels; `None` = auf diesem Gerät nicht eingerichtet.
+    public_key: Option<Vec<u8>>,
+    /// Zeitpunkt der letzten Eingabe des Master-Passworts.
+    password_at: i64,
+    /// Beim Sperren mit dem Windows-Hello-Schlüssel verschlüsselter Tresorschlüssel.
+    wrapped: Option<Vec<u8>>,
+    valid_until: i64,
+}
+
+impl HelloUnlock {
+    fn usable(&self) -> bool {
+        self.wrapped.is_some() && now() < self.valid_until
+    }
 }
 
 /// Sperrreihenfolge: `inner` vor `sync`. Netzwerkzugriffe nie unter `inner`.
@@ -77,6 +97,16 @@ impl Inner {
     }
 
     fn lock_vault(&mut self) {
+        if let Some(v) = &self.vault {
+            self.hello.wrapped = None;
+            let valid_until = self.hello.password_at + v.data.settings.hello_unlock_hours as i64 * 3600;
+            // Bei ausstehendem Schlüsselwechsel wird der alte Schlüssel noch für Google Drive
+            // gebraucht – den kennt nur das Master-Passwort.
+            if let Some(pk) = self.hello.public_key.as_ref().filter(|_| now() < valid_until && !v.rekey_pending()) {
+                self.hello.wrapped = hello::encrypt(pk, v.key_bytes()).ok();
+                self.hello.valid_until = valid_until;
+            }
+        }
         self.vault = None; // Drop nullt Schlüssel und Inhalte
         agent::reset_approvals();
         if let Some(seq) = self.clipboard_seq.take() {
@@ -121,6 +151,8 @@ pub(crate) fn now() -> i64 {
 struct VaultStatus {
     exists: bool,
     unlocked: bool,
+    /// Entsperren mit Windows Hello ist gerade möglich.
+    hello_unlock: bool,
 }
 
 #[derive(Serialize)]
@@ -208,7 +240,18 @@ struct TotpCode {
 #[tauri::command]
 fn vault_status(state: State<'_, AppState>) -> VaultStatus {
     let g = state.lock();
-    VaultStatus { exists: g.path.exists(), unlocked: g.vault.is_some() }
+    VaultStatus { exists: g.path.exists(), unlocked: g.vault.is_some(), hello_unlock: g.hello.usable() }
+}
+
+/// Nach Eingabe des Master-Passworts: Windows-Hello-Entsperren für die eingestellte Dauer erlauben.
+async fn password_entered(state: &AppState) {
+    let public_key = blocking(|| hello::public_key().ok()).await.ok().flatten();
+    let mut g = state.lock();
+    g.hello = HelloUnlock { public_key, password_at: now(), ..Default::default() };
+}
+
+fn main_hwnd(app: &AppHandle) -> isize {
+    app.get_webview_window("main").and_then(|w| w.hwnd().ok()).map(|h| h.0 as isize).unwrap_or(0)
 }
 
 #[tauri::command]
@@ -220,6 +263,7 @@ async fn create_vault(state: State<'_, AppState>, password: String) -> Result<()
     strength::check_master(&password)?;
     let mut v = UnlockedVault::create(&password)?;
     v.data.key_changed_at = now();
+    password_entered(&state).await;
     let mut g = state.lock();
     g.vault = Some(v);
     g.touch();
@@ -256,6 +300,7 @@ async fn unlock(app: AppHandle, state: State<'_, AppState>, password: String) ->
     if upgraded {
         v.upgrade_kdf(&password, now())?;
     }
+    password_entered(&state).await;
     let agent_enabled = v.data.settings.agent_enabled;
     let mut g = state.lock();
     g.vault = Some(v);
@@ -268,6 +313,89 @@ async fn unlock(app: AppHandle, state: State<'_, AppState>, password: String) ->
         delete_backups(&path);
     }
     let _ = g.sync_tx.send(sync::Msg::Now);
+    Ok(())
+}
+
+/// Entsperrt mit Windows Hello statt Master-Passwort (innerhalb der eingestellten Dauer).
+#[tauri::command]
+async fn unlock_hello(app: AppHandle, state: State<'_, AppState>) -> Result<()> {
+    let (wrapped, path) = {
+        let mut g = state.lock();
+        if !g.hello.usable() {
+            g.hello.wrapped = None;
+            return Err(Error::Invalid("Bitte das Master-Passwort eingeben".into()));
+        }
+        (g.hello.wrapped.clone().unwrap_or_default(), g.path.clone())
+    };
+    let hwnd = main_hwnd(&app);
+    let key = blocking(move || hello::decrypt(hwnd, "Remember Key entsperren", &wrapped)).await?.map_err(Error::Invalid)?;
+    let bytes = std::fs::read(&path)?;
+    let v = match UnlockedVault::open_with_key(&bytes, &key) {
+        Ok(v) => v,
+        Err(Error::Decrypt) => {
+            state.lock().hello.wrapped = None;
+            return Err(Error::Invalid(
+                "Der Tresor wurde inzwischen mit einem anderen Schlüssel gespeichert. Bitte das Master-Passwort eingeben."
+                    .into(),
+            ));
+        }
+        Err(e) => return Err(e),
+    };
+    let agent_enabled = v.data.settings.agent_enabled;
+    let mut g = state.lock();
+    if g.vault.is_none() {
+        g.vault = Some(v);
+    }
+    g.hello.wrapped = None;
+    g.touch();
+    if agent_enabled {
+        agent::register_browser_host();
+    }
+    let _ = g.sync_tx.send(sync::Msg::Now);
+    Ok(())
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HelloUnlockStatus {
+    /// Windows Hello ist auf diesem Gerät eingerichtet.
+    available: bool,
+    /// Entsperren mit Windows Hello ist auf diesem Gerät eingeschaltet.
+    enabled: bool,
+}
+
+#[tauri::command]
+async fn hello_unlock_status(state: State<'_, AppState>) -> Result<HelloUnlockStatus> {
+    state.lock().vault()?;
+    let (available, enabled) = blocking(|| (hello::available(), hello::key_exists())).await?;
+    Ok(HelloUnlockStatus { available, enabled })
+}
+
+/// Schaltet das Entsperren mit Windows Hello auf diesem Gerät ein oder aus. Gilt sofort bis
+/// zum Ablauf der Dauer seit der letzten Passworteingabe; das Einschalten fragt Windows Hello.
+#[tauri::command]
+async fn set_hello_unlock(app: AppHandle, state: State<'_, AppState>, enabled: bool) -> Result<()> {
+    state.lock().vault()?;
+    if enabled {
+        if !blocking(hello::available).await? {
+            return Err(Error::Invalid("Windows Hello ist auf diesem Gerät nicht eingerichtet".into()));
+        }
+        let hwnd = main_hwnd(&app);
+        let public_key = blocking(move || {
+            hello::create_key(hwnd, "Remember Key: Entsperren mit Windows Hello einrichten")?;
+            hello::public_key()
+        })
+        .await?
+        .map_err(Error::Invalid)?;
+        state.lock().hello.public_key = Some(public_key);
+    } else {
+        {
+            let mut g = state.lock();
+            g.hello.public_key = None;
+            g.hello.wrapped = None;
+        }
+        blocking(hello::delete_key).await?.map_err(Error::Invalid)?;
+    }
     Ok(())
 }
 
@@ -296,6 +424,7 @@ async fn change_master_password(
         return Err(Error::Invalid("Aktuelles Master-Passwort ist falsch".into()));
     }
     v.change_password(&new_password, now())?;
+    g.hello.password_at = now();
     g.persist()?;
     // Sicherungen mit dem alten Passwort entfernen; die Kopie in Google Drive wird
     // beim nächsten Abgleich durch eine neue Datei ersetzt (siehe sync::sync_once).
@@ -663,7 +792,7 @@ async fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> 
 async fn agent_decide(app: AppHandle, id: u64, decision: agent::Decision) -> Result<()> {
     let require_hello = app.state::<AppState>().lock().vault()?.data.settings.agent_hello;
     if require_hello && decision != agent::Decision::Deny {
-        let hwnd = app.get_webview_window("main").and_then(|w| w.hwnd().ok()).map(|h| h.0 as isize).unwrap_or(0);
+        let hwnd = main_hwnd(&app);
         blocking(move || hello::verify(hwnd, "Remember Key: Zugangsdaten für den KI-Assistenten freigeben"))
             .await?
             .map_err(Error::Invalid)?;
@@ -737,7 +866,12 @@ fn spawn_auto_lock(app: AppHandle) {
         thread::sleep(Duration::from_secs(2));
         let state = app.state::<AppState>();
         let mut g = state.lock();
-        let Some(v) = &g.vault else { continue };
+        let Some(v) = &g.vault else {
+            if g.hello.wrapped.is_some() && !g.hello.usable() {
+                g.hello.wrapped = None;
+            }
+            continue;
+        };
         let timeout = Duration::from_secs(v.data.settings.auto_lock_minutes as u64 * 60);
         if g.last_activity.elapsed() >= timeout {
             g.lock_vault();
@@ -762,6 +896,7 @@ pub fn run() {
                     last_activity: Instant::now(),
                     clipboard_seq: None,
                     sync_tx,
+                    hello: HelloUnlock::default(),
                 }),
                 sync: Mutex::new(sync::SyncState::new(dir.join("sync.json"))),
                 sync_running: Mutex::new(()),
@@ -776,6 +911,9 @@ pub fn run() {
             vault_status,
             create_vault,
             unlock,
+            unlock_hello,
+            hello_unlock_status,
+            set_hello_unlock,
             lock,
             touch,
             change_master_password,
@@ -812,7 +950,9 @@ pub fn run() {
     app.run(|handle, event| {
         if let RunEvent::Exit = event {
             if let Some(state) = handle.try_state::<AppState>() {
-                state.lock().lock_vault();
+                let mut g = state.lock();
+                g.hello = HelloUnlock::default();
+                g.lock_vault();
             }
         }
     });

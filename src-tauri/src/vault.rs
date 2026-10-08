@@ -297,11 +297,26 @@ pub struct Settings {
     /// Freigaben von KI-Anfragen zusätzlich mit Windows Hello bestätigen.
     #[serde(default)]
     pub agent_hello: bool,
+    /// So lange nach der letzten Eingabe des Master-Passworts darf mit Windows Hello
+    /// entsperrt werden (sofern auf dem Gerät eingerichtet).
+    #[serde(default = "default_hello_unlock_hours")]
+    pub hello_unlock_hours: u32,
+}
+
+fn default_hello_unlock_hours() -> u32 {
+    8
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { auto_lock_minutes: 5, clipboard_clear_seconds: 30, updated_at: 0, agent_enabled: false, agent_hello: false }
+        Self {
+            auto_lock_minutes: 5,
+            clipboard_clear_seconds: 30,
+            updated_at: 0,
+            agent_enabled: false,
+            agent_hello: false,
+            hello_unlock_hours: default_hello_unlock_hours(),
+        }
     }
 }
 
@@ -314,6 +329,9 @@ impl Settings {
             return Err(Error::Invalid(
                 "Zwischenablage-Timeout muss zwischen 5 und 300 Sekunden liegen".into(),
             ));
+        }
+        if !(1..=24).contains(&self.hello_unlock_hours) {
+            return Err(Error::Invalid("Windows-Hello-Entsperren muss zwischen 1 und 24 Stunden gelten".into()));
         }
         Ok(())
     }
@@ -443,8 +461,9 @@ impl VaultData {
 
         self.key_changed_at = self.key_changed_at.max(other.key_changed_at);
         let s = other.settings;
-        let key =
-            |s: &Settings| (s.updated_at, s.auto_lock_minutes, s.clipboard_clear_seconds, s.agent_enabled, s.agent_hello);
+        let key = |s: &Settings| {
+            (s.updated_at, s.auto_lock_minutes, s.clipboard_clear_seconds, s.agent_enabled, s.agent_hello, s.hello_unlock_hours)
+        };
         if key(&s) > key(&self.settings) {
             self.settings = s;
         }
@@ -697,6 +716,24 @@ impl UnlockedVault {
         Ok(Self { key, kdf: file.kdf, salt: file.salt, previous: None, data })
     }
 
+    /// Öffnet mit einem bereits abgeleiteten Schlüssel (Windows-Hello-Entsperren).
+    /// Passt der Schlüssel nicht zur Datei, schlägt die Entschlüsselung fehl.
+    pub fn open_with_key(bytes: &[u8], raw_key: &[u8]) -> Result<Self> {
+        let file = parse_file(bytes)?;
+        if raw_key.len() != KEY_LEN {
+            return Err(Error::Decrypt);
+        }
+        let mut key = SecretKey::new();
+        key.0.copy_from_slice(raw_key);
+        let data = decrypt_with(&key, &file)?;
+        Ok(Self { key, kdf: file.kdf, salt: file.salt, previous: None, data })
+    }
+
+    /// Der Tresorschlüssel selbst – nur zum Verschlüsseln für Windows Hello.
+    pub fn key_bytes(&self) -> &[u8] {
+        &self.key.bytes()[..]
+    }
+
     /// Entschlüsselt einen fremden Stand mit dem vorhandenen Schlüssel, sofern
     /// Salt und KDF-Parameter übereinstimmen (ohne erneute Schlüsselableitung).
     pub fn open_remote(&self, bytes: &[u8]) -> Result<RemoteOpen> {
@@ -839,6 +876,17 @@ mod tests {
     }
 
     #[test]
+    fn open_with_key_matches_password() {
+        let mut v = UnlockedVault::create_with("korrektes pferd 1", TEST_KDF).unwrap();
+        v.data.entries.push(sample_entry());
+        let bytes = v.seal().unwrap();
+        let opened = UnlockedVault::open_with_key(&bytes, v.key_bytes()).unwrap();
+        assert_eq!(opened.data.entries[0].password, "s3cr3t!");
+        assert!(matches!(UnlockedVault::open_with_key(&bytes, &[0u8; KEY_LEN]), Err(Error::Decrypt)));
+        assert!(matches!(UnlockedVault::open_with_key(&bytes, &[1u8; 16]), Err(Error::Decrypt)));
+    }
+
+    #[test]
     fn folders_delete_reparents_children() {
         let mut d = VaultData::default();
         d.create_folder("a".into(), "Arbeit", None, 1).unwrap();
@@ -967,7 +1015,7 @@ mod tests {
     fn merge_settings_newer_wins() {
         let mut a = VaultData::default();
         let mut b = VaultData::default();
-        b.settings = Settings { auto_lock_minutes: 15, clipboard_clear_seconds: 30, updated_at: 9, agent_enabled: true, agent_hello: false };
+        b.settings = Settings { auto_lock_minutes: 15, clipboard_clear_seconds: 30, updated_at: 9, agent_enabled: true, agent_hello: false, hello_unlock_hours: 8 };
         a.merge(&b);
         assert_eq!(a.settings.auto_lock_minutes, 15);
         assert!(a.settings.agent_enabled);

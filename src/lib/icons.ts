@@ -21,6 +21,7 @@ import copy from "@phosphor-icons/core/assets/regular/copy.svg?raw";
 import diceFive from "@phosphor-icons/core/assets/regular/dice-five.svg?raw";
 import eye from "@phosphor-icons/core/assets/regular/eye.svg?raw";
 import eyeSlash from "@phosphor-icons/core/assets/regular/eye-slash.svg?raw";
+import fingerprint from "@phosphor-icons/core/assets/regular/fingerprint.svg?raw";
 import gearSix from "@phosphor-icons/core/assets/regular/gear-six.svg?raw";
 import key from "@phosphor-icons/core/assets/regular/key.svg?raw";
 import lockSimple from "@phosphor-icons/core/assets/regular/lock-simple.svg?raw";
@@ -57,6 +58,7 @@ export const icons = {
   "dice-five": diceFive,
   eye,
   "eye-slash": eyeSlash,
+  fingerprint,
   "gear-six": gearSix,
   key,
   "lock-simple": lockSimple,

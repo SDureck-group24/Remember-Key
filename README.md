@@ -34,6 +34,11 @@ Nach Änderungen am Designsystem `styles.css` neu kopieren.
 - **Passwortwechsel:** löscht lokale Sicherungen mit dem alten Schlüssel; in Google Drive wird die alte Datei
   samt Versionsverlauf durch eine neue ersetzt.
 - **Sperre** nach Inaktivität (Standard 5 min), beim Sperren von Windows, im Energiesparmodus und mit Strg+L.
+- **Entsperren mit Windows Hello** (optional, pro Gerät): Beim Sperren wird der Tresorschlüssel mit dem
+  öffentlichen Teil eines RSA-Schlüssels im Windows-Hello-Speicher (Passport KSP, ggf. TPM) verschlüsselt und nur
+  im Arbeitsspeicher gehalten. Entschlüsseln verlangt jedes Mal PIN, Fingerabdruck oder Gesicht. Gilt bis zu
+  8 Stunden (1–24 einstellbar) nach der letzten Eingabe des Master-Passworts; nach App-Neustart und bei
+  ausstehendem Schlüsselwechsel ist immer das Master-Passwort nötig.
 - **Zwischenablage:** Kopieren läuft im Backend; Inhalte werden vom Windows-Verlauf (Win+V) und Cloud-Sync
   ausgeschlossen und nach 30 s geleert (nur, falls zwischenzeitlich nichts anderes kopiert wurde).
 - **Webview:** strikte CSP, keine Plugins außer Events, eingefrorene Prototypen.

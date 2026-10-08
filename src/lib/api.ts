@@ -3,6 +3,15 @@ import { invoke } from "@tauri-apps/api/core";
 export interface VaultStatus {
   exists: boolean;
   unlocked: boolean;
+  /** Entsperren mit Windows Hello ist gerade möglich. */
+  helloUnlock: boolean;
+}
+
+export interface HelloUnlockStatus {
+  /** Windows Hello ist auf diesem Gerät eingerichtet. */
+  available: boolean;
+  /** Entsperren mit Windows Hello ist auf diesem Gerät eingeschaltet. */
+  enabled: boolean;
 }
 
 export interface EntrySummary {
@@ -115,6 +124,8 @@ export interface Settings {
   agentEnabled: boolean;
   /** Freigaben zusätzlich mit Windows Hello bestätigen. */
   agentHello: boolean;
+  /** Stunden nach der letzten Eingabe des Master-Passworts, in denen Windows Hello genügt. */
+  helloUnlockHours: number;
 }
 
 export type AgentOutcome = "ok" | "locked" | "disabled" | "rejected" | "denied" | "failed";
@@ -205,6 +216,9 @@ export const api = {
   status: () => invoke<VaultStatus>("vault_status"),
   create: (password: string) => invoke<void>("create_vault", { password }),
   unlock: (password: string) => invoke<void>("unlock", { password }),
+  unlockHello: () => invoke<void>("unlock_hello"),
+  helloUnlockStatus: () => invoke<HelloUnlockStatus>("hello_unlock_status"),
+  setHelloUnlock: (enabled: boolean) => invoke<void>("set_hello_unlock", { enabled }),
   lock: () => invoke<void>("lock"),
   touch: () => invoke<void>("touch"),
   changeMaster: (current: string, newPassword: string) =>

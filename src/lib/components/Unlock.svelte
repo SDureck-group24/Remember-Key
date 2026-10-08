@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onMount } from "svelte";
   import { api, errorText } from "$lib/api";
   import Gate from "./Gate.svelte";
   import Icon from "./Icon.svelte";
@@ -8,7 +9,18 @@
   let password = $state("");
   let busy = $state(false);
   let error = $state("");
-  let input: HTMLInputElement;
+  let hello = $state(false);
+  let input = $state<HTMLInputElement>();
+  let helloButton = $state<HTMLButtonElement>();
+
+  onMount(async () => {
+    try {
+      hello = (await api.status()).helloUnlock;
+    } catch {
+      hello = false;
+    }
+    if (hello) setTimeout(() => helloButton?.focus());
+  });
 
   async function submit(e: SubmitEvent) {
     e.preventDefault();
@@ -27,9 +39,36 @@
       busy = false;
     }
   }
+
+  async function unlockHello() {
+    busy = true;
+    error = "";
+    try {
+      await api.unlockHello();
+      ondone();
+    } catch (err) {
+      error = errorText(err);
+      // Abgelaufen oder Schlüssel passt nicht mehr: nur noch Passwort anbieten.
+      hello = (await api.status().catch(() => null))?.helloUnlock ?? false;
+      if (!hello) setTimeout(() => input?.focus());
+    } finally {
+      busy = false;
+    }
+  }
 </script>
 
-<Gate title="Tresor entsperren" lead={notice || "Geben Sie Ihr Master-Passwort ein."}>
+<Gate
+  title="Tresor entsperren"
+  lead={notice || (hello ? "Mit Windows Hello oder dem Master-Passwort entsperren." : "Geben Sie Ihr Master-Passwort ein.")}
+>
+  {#if hello}
+    <button class="btn btn-primary btn-block" bind:this={helloButton} disabled={busy} onclick={unlockHello}>
+      <Icon name="fingerprint" size={16} />
+      {busy ? "Warte auf Windows Hello …" : "Mit Windows Hello entsperren"}
+    </button>
+    <div class="or"><span>oder</span></div>
+  {/if}
+
   <form onsubmit={submit}>
     <div class="field">
       <label for="pw">Master-Passwort</label>
@@ -41,16 +80,16 @@
         bind:this={input}
         bind:value={password}
         autocomplete="current-password"
-        autofocus
+        autofocus={!hello}
         disabled={busy}
       />
     </div>
 
     {#if error}<p class="error"><Icon name="warning-circle" size={16} /> {error}</p>{/if}
 
-    <button class="btn btn-primary btn-block submit" disabled={!password || busy}>
+    <button class="btn btn-block submit" class:btn-primary={!hello} class:btn-secondary={hello} disabled={!password || busy}>
       <Icon name="lock-simple" size={16} />
-      {busy ? "Entsperre …" : "Entsperren"}
+      {busy && !hello ? "Entsperre …" : "Entsperren"}
     </button>
   </form>
 </Gate>
@@ -61,5 +100,19 @@
   }
   .error {
     margin-top: var(--space-4);
+  }
+  .or {
+    display: flex;
+    align-items: center;
+    gap: var(--space-4);
+    margin: var(--space-6) 0;
+    font-size: 13px;
+    color: var(--color-text-muted);
+  }
+  .or::before,
+  .or::after {
+    content: "";
+    flex: 1;
+    border-top: 1px solid var(--color-divider);
   }
 </style>

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { api, errorText, MIN_MASTER_LEN, MIN_MASTER_SCORE, type Settings } from "$lib/api";
+  import { api, errorText, MIN_MASTER_LEN, MIN_MASTER_SCORE, type HelloUnlockStatus, type Settings } from "$lib/api";
   import { store } from "$lib/store.svelte";
   import AgentAccess from "./AgentAccess.svelte";
   import GoogleDrive from "./GoogleDrive.svelte";
@@ -11,6 +11,10 @@
 
   let settings = $state<Settings | null>(null);
   let error = $state("");
+
+  let hello = $state<HelloUnlockStatus | null>(null);
+  let helloBusy = $state(false);
+  let helloError = $state("");
 
   let current = $state("");
   let next = $state("");
@@ -25,7 +29,25 @@
     } catch (e) {
       error = errorText(e);
     }
+    hello = await api.helloUnlockStatus().catch(() => null);
   });
+
+  /** Sofort wirksam – das Einschalten fragt Windows Hello. */
+  async function toggleHello(e: Event) {
+    const box = e.currentTarget as HTMLInputElement;
+    const enabled = box.checked;
+    helloBusy = true;
+    helloError = "";
+    try {
+      await api.setHelloUnlock(enabled);
+      hello = { available: true, enabled };
+    } catch (err) {
+      helloError = errorText(err);
+      box.checked = !enabled;
+    } finally {
+      helloBusy = false;
+    }
+  }
 
   async function saveSettings(e: SubmitEvent) {
     e.preventDefault();
@@ -36,6 +58,7 @@
         clipboardClearSeconds: Number(settings.clipboardClearSeconds),
         agentEnabled: settings.agentEnabled,
         agentHello: settings.agentHello,
+        helloUnlockHours: Number(settings.helloUnlockHours),
       });
       onnotify("Einstellungen gespeichert");
       onclose();
@@ -97,6 +120,24 @@
             </div>
           </div>
         </div>
+        {#if hello?.available}
+          <div class="seg hello-unlock">
+            <label class="seg-opt" title="Nur auf diesem Gerät. Nach einem Neustart der App ist das Master-Passwort nötig.">
+              <input type="checkbox" checked={hello.enabled} disabled={helloBusy} onchange={toggleHello} />
+              Mit Windows Hello entsperren
+            </label>
+          </div>
+          {#if hello.enabled}
+            <div class="field hello-hours">
+              <label for="hello-hours">Master-Passwort erneut verlangen nach</label>
+              <div class="unit">
+                <input id="hello-hours" class="input" type="number" min="1" max="24" bind:value={settings.helloUnlockHours} />
+                <span>Std.</span>
+              </div>
+            </div>
+          {/if}
+          {#if helloError}<p class="error"><Icon name="warning-circle" size={16} /> {helloError}</p>{/if}
+        {/if}
         <h6 class="agent-title">KI-Zugriff</h6>
         <div class="seg">
           <label class="seg-opt">
@@ -169,6 +210,13 @@
   }
   .hello {
     margin-top: var(--space-2);
+  }
+  .hello-unlock,
+  .hello-hours {
+    margin-top: var(--space-4);
+  }
+  .hello-hours .input {
+    width: 96px;
   }
   .master,
   .drive {
