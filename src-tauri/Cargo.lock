@@ -3068,6 +3068,8 @@ dependencies = [
  "ureq",
  "url",
  "uuid",
+ "windows",
+ "windows-future",
  "windows-sys 0.59.0",
  "zeroize",
  "zxcvbn",

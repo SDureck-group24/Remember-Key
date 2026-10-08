@@ -45,6 +45,10 @@
   let authBasic = $state(false);
   let authHeader = $state(false);
   let authHeaderName = $state("");
+  let authForm = $state(false);
+  let authFormName = $state("");
+  let authJson = $state(false);
+  let authJsonName = $state("");
   let sessionMinutes = $state(0);
   let fillLogin = $state(false);
   let form = $state<Omit<EntryInput, "password" | "apiToken" | "agent">>({
@@ -85,6 +89,12 @@
           authBasic = d.agent.auth.some((a) => a.kind === "basic");
           authHeader = !!header;
           authHeaderName = header?.kind === "header" ? header.name : "";
+          const form = d.agent.auth.find((a) => a.kind === "formField");
+          authForm = !!form;
+          authFormName = form?.kind === "formField" ? form.name : "";
+          const json = d.agent.auth.find((a) => a.kind === "jsonField");
+          authJson = !!json;
+          authJsonName = json?.kind === "jsonField" ? json.name : "";
         }
         sessionMinutes = d.agent.sessionMinutes;
         fillLogin = d.agent.fillLogin;
@@ -142,6 +152,8 @@
       if (authBearer) auth.push({ kind: "bearer" });
       if (authBasic) auth.push({ kind: "basic" });
       if (authHeader && authHeaderName.trim()) auth.push({ kind: "header", name: authHeaderName.trim() });
+      if (authForm && authFormName.trim()) auth.push({ kind: "formField", name: authFormName.trim() });
+      if (authJson && authJsonName.trim()) auth.push({ kind: "jsonField", name: authJsonName.trim() });
       const agent = {
         enabled: agentEnabled,
         hosts: agentHosts.split(/[\s,;]+/).filter(Boolean),
@@ -313,8 +325,14 @@
           <label class="seg-opt" title="Eigener Header mit dem Passwort als Wert">
             <input type="checkbox" bind:checked={authHeader} /> Eigener Header
           </label>
+          <label class="seg-opt" title="Feld in einem Formular-Body (application/x-www-form-urlencoded)">
+            <input type="checkbox" bind:checked={authForm} /> Formularfeld
+          </label>
+          <label class="seg-opt" title="Feld auf oberster Ebene eines JSON-Bodys">
+            <input type="checkbox" bind:checked={authJson} /> JSON-Feld
+          </label>
         </div>
-        {#if authBearer || authBasic || authHeader}
+        {#if authBearer || authBasic || authHeader || authForm || authJson}
           <div class="hint">
             Eingesetzt wird der API-Token, falls hinterlegt, sonst das Passwort. Die meisten APIs akzeptieren kein
             Login-Passwort. Nur https – http ist ausschließlich für localhost erlaubt.
@@ -328,6 +346,26 @@
             autocomplete="off"
             aria-label="Header-Name"
             placeholder="Header-Name, z. B. X-Api-Key"
+          />
+        {/if}
+        {#if authForm}
+          <input
+            class="input hosts mono"
+            bind:value={authFormName}
+            spellcheck="false"
+            autocomplete="off"
+            aria-label="Name des Formularfelds"
+            placeholder="Formularfeld, z. B. password"
+          />
+        {/if}
+        {#if authJson}
+          <input
+            class="input hosts mono"
+            bind:value={authJsonName}
+            spellcheck="false"
+            autocomplete="off"
+            aria-label="Name des JSON-Felds"
+            placeholder="JSON-Feld, z. B. password"
           />
         {/if}
 

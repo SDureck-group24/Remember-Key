@@ -262,9 +262,19 @@ fn http_request(app: &AppHandle, req: &HttpRequest) -> Response {
     }
 }
 
-/// Prüft eine `fill_login`-Anfrage. Liefert Titel, Hosts der Freigabe, Ziel-Host (falls
-/// angegeben) und Dauer einer Sitzungsfreigabe.
-fn check_fill(app: &AppHandle, req: &FillLogin) -> Result<(String, Vec<String>, Option<String>, u32), Refusal> {
+/// Ergebnis der Prüfung einer `fill_login`-Anfrage (ohne Geheimnisse).
+struct FillCheck {
+    title: String,
+    /// Hosts der Freigabe.
+    hosts: Vec<String>,
+    /// Ziel-Host, falls die KI eine Adresse angegeben hat.
+    hint: Option<String>,
+    session_minutes: u32,
+    has_totp: bool,
+}
+
+/// Prüft eine `fill_login`-Anfrage gegen die Freigabe des Eintrags.
+fn check_fill(app: &AppHandle, req: &FillLogin) -> Result<FillCheck, Refusal> {
     let reject = |m: &str| (m.to_string(), Outcome::Rejected);
     let hint = match req.url.as_deref() {
         None => None,
@@ -294,12 +304,18 @@ fn check_fill(app: &AppHandle, req: &FillLogin) -> Result<(String, Vec<String>, 
     if e.password.is_empty() {
         return Err(reject("Für diesen Eintrag ist kein Passwort hinterlegt"));
     }
-    Ok((e.title.clone(), policy.hosts.clone(), hint, policy.session_minutes))
+    Ok(FillCheck {
+        title: e.title.clone(),
+        hosts: policy.hosts.clone(),
+        hint,
+        session_minutes: policy.session_minutes,
+        has_totp: e.totp.is_some(),
+    })
 }
 
 fn fill_login(app: &AppHandle, req: &FillLogin) -> Response {
     const TOOL: &str = "fill_login";
-    let (title, hosts, hint, session_minutes) = match check_fill(app, req) {
+    let FillCheck { title, hosts, hint, session_minutes, has_totp } = match check_fill(app, req) {
         Ok(x) => x,
         Err((msg, outcome)) => {
             log(app, TOOL, msg.clone(), outcome);
@@ -320,7 +336,7 @@ fn fill_login(app: &AppHandle, req: &FillLogin) -> Response {
         method: "LOGIN".into(),
         host: target.clone(),
         path: String::new(),
-        auth: "password".into(),
+        auth: if has_totp { "password+totp" } else { "password" }.into(),
         session_minutes,
         expires_at: 0,
     };
@@ -328,8 +344,8 @@ fn fill_login(app: &AppHandle, req: &FillLogin) -> Response {
     let approval_note = confirm(app, TOOL, pending, key, &detail)?;
 
     // Nach der Bestätigung erneut prüfen und erst dann die Zugangsdaten lesen.
-    let creds = check_fill(app, req).and_then(|(_, hosts_now, _, _)| {
-        if hosts_now != hosts {
+    let creds = check_fill(app, req).and_then(|now| {
+        if now.hosts != hosts {
             return Err(("Die Freigabe wurde während der Bestätigung geändert".to_string(), Outcome::Rejected));
         }
         let state = app.state::<AppState>();
@@ -338,17 +354,26 @@ fn fill_login(app: &AppHandle, req: &FillLogin) -> Response {
         let e = v.data.entries.iter().find(|e| e.id == req.entry_id).ok_or_else(|| {
             ("Eintrag nicht gefunden".to_string(), Outcome::Rejected)
         })?;
-        Ok((zeroize::Zeroizing::new(e.username.clone()), zeroize::Zeroizing::new(e.password.clone())))
+        // Der Code wird erst jetzt erzeugt, damit er beim Ausfüllen noch gültig ist.
+        let otp = match &e.totp {
+            Some(cfg) => Some(zeroize::Zeroizing::new(
+                crate::totp::generate(cfg, crate::now() as u64)
+                    .map_err(|err| (err.to_string(), Outcome::Failed))?
+                    .0,
+            )),
+            None => None,
+        };
+        Ok((zeroize::Zeroizing::new(e.username.clone()), zeroize::Zeroizing::new(e.password.clone()), otp))
     });
-    let (username, password) = match creds {
+    let (username, password, otp) = match creds {
         Ok(c) => c,
         Err((msg, outcome)) => {
             log(app, TOOL, format!("{detail} · {msg}"), outcome);
             return Err(msg);
         }
     };
-    let result = browser::fill(&hosts, hint.as_deref(), &username, &password);
-    drop((username, password));
+    let result = browser::fill(&hosts, hint.as_deref(), &username, &password, otp.as_deref().map(|s| s.as_str()));
+    drop((username, password, otp));
     match result {
         Ok(v) => {
             let filled = v["filled"].as_array().map(|a| a.iter().filter_map(Value::as_str).collect::<Vec<_>>().join("+"));

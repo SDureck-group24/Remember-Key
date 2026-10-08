@@ -35,6 +35,7 @@
         autoLockMinutes: Number(settings.autoLockMinutes),
         clipboardClearSeconds: Number(settings.clipboardClearSeconds),
         agentEnabled: settings.agentEnabled,
+        agentHello: settings.agentHello,
       });
       onnotify("Einstellungen gespeichert");
       onclose();
@@ -103,6 +104,14 @@
             KI-Assistenten den Zugriff auf freigegebene Einträge erlauben
           </label>
         </div>
+        {#if settings.agentEnabled}
+          <div class="seg hello">
+            <label class="seg-opt" title="PIN, Fingerabdruck oder Gesicht – zusätzlich zum Klick im Dialog">
+              <input type="checkbox" bind:checked={settings.agentHello} />
+              Freigaben zusätzlich mit Windows Hello bestätigen
+            </label>
+          </div>
+        {/if}
         <AgentAccess enabled={settings.agentEnabled} />
         {#if error}<p class="error"><Icon name="warning-circle" size={16} /> {error}</p>{/if}
         <div class="dialog-actions">
@@ -157,6 +166,9 @@
   }
   .agent-title {
     margin-top: var(--space-6);
+  }
+  .hello {
+    margin-top: var(--space-2);
   }
   .master,
   .drive {

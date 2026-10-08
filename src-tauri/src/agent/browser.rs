@@ -74,7 +74,13 @@ pub fn deliver(id: u64, result: Response) -> bool {
 
 /// Schickt den Befehl an alle verbundenen Browser. Das erste erfolgreiche Ergebnis
 /// gewinnt (nur ein Browser hat einen passenden Tab); sonst werden die Fehler gesammelt.
-pub fn fill(hosts: &[String], host_hint: Option<&str>, username: &str, password: &str) -> Result<Value, String> {
+pub fn fill(
+    hosts: &[String],
+    host_hint: Option<&str>,
+    username: &str,
+    password: &str,
+    otp: Option<&str>,
+) -> Result<Value, String> {
     let (tx, rx) = mpsc::channel();
     let id = {
         let mut s = state();
@@ -83,7 +89,7 @@ pub fn fill(hosts: &[String], host_hint: Option<&str>, username: &str, password:
         s.waiting.push((id, tx));
         id
     };
-    let result = send_and_wait(id, hosts, host_hint, username, password, &rx);
+    let result = send_and_wait(id, hosts, host_hint, username, password, otp, &rx);
     state().waiting.retain(|(w, _)| *w != id);
     result
 }
@@ -95,6 +101,7 @@ fn send_and_wait(
     host_hint: Option<&str>,
     username: &str,
     password: &str,
+    otp: Option<&str>,
     rx: &mpsc::Receiver<Response>,
 ) -> Result<Value, String> {
     let cmd = BrowserCommand::Fill {
@@ -103,6 +110,7 @@ fn send_and_wait(
         host_hint: host_hint.map(str::to_string),
         username: username.to_string(),
         password: password.to_string(),
+        otp: otp.map(str::to_string),
     };
     let targets: Vec<Arc<Mutex<Pipe>>> = state().conns.iter().map(|c| c.pipe.clone()).collect();
     let mut sent = 0;
@@ -144,6 +152,7 @@ fn send_and_wait(
     _host_hint: Option<&str>,
     _username: &str,
     _password: &str,
+    _otp: Option<&str>,
     _rx: &mpsc::Receiver<Response>,
 ) -> Result<Value, String> {
     Err(NOT_CONNECTED.into())
@@ -156,7 +165,7 @@ mod tests {
     #[test]
     fn fill_without_browser_fails_fast() {
         let started = Instant::now();
-        let r = fill(&["x.de".into()], None, "u", "p");
+        let r = fill(&["x.de".into()], None, "u", "p", None);
         assert_eq!(r.unwrap_err(), NOT_CONNECTED);
         assert!(started.elapsed() < Duration::from_secs(1));
         assert!(state().waiting.is_empty());

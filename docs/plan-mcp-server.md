@@ -60,7 +60,7 @@ Neues optionales Feld am `Entry`, abwärtskompatibel per `#[serde(default)]` und
 pub struct AgentPolicy {
     pub enabled: bool,
     pub hosts: Vec<String>,         // exakt oder "*.example.com" (nur Subdomains); Standard: Host aus `url`
-    pub auth: Vec<AuthLocation>,    // Bearer | Basic | Header { name }; leer = nur Auflisten
+    pub auth: Vec<AuthLocation>,    // Bearer | Basic | Header | FormField | JsonField; leer = nur Auflisten
     pub session_minutes: u32,       // 0 = jede Anfrage bestätigen, sonst bis 60 Minuten
 }
 ```
@@ -71,8 +71,7 @@ Token statt des Passworts ein, denn die meisten APIs akzeptieren kein Login-Pass
 `list_entries` meldet unter `secret`, was eingesetzt würde.
 
 Umgesetzt ist das schlanker als ursprünglich geplant: Statt einer eigenen `actions`-Liste regelt `auth`,
-ob und wo das Passwort eingesetzt werden darf. `FormField` und TOTP-Einsetzen fehlen noch (siehe
-Phase 4).
+ob und wo das Passwort eingesetzt werden darf. `fill_login` ist ein eigener Schalter.
 
 `Settings` erhält `agent_enabled: bool` (Standard `false`). Das Protokoll liegt in einer eigenen Datei
 `agent-log.jsonl` im App-Verzeichnis. Es enthält nur Metadaten: Zeit, Tool, Eintrags-ID und Titel,
@@ -111,8 +110,14 @@ Regeln für `http_request`:
 - Geheimnisse liegen nur in `Zeroizing`-Puffern und werden nach dem Request genullt. Ausnahme: Kopien,
   die `ureq` intern für den Header anlegt, lassen sich nicht nullen.
 
-TOTP (noch offen): Eine Location `TotpHeader(name)` oder `FormField` mit Quelle `totp` reicht. Der Code
-wird wie ein Passwort behandelt und taucht nie in der Antwort auf.
+Body-Felder (Phase 4): Bei `form:<Name>` und `json:<Name>` ergänzt die App das Feld im Body
+(Formular bzw. JSON-Objekt auf oberster Ebene) und setzt den passenden Content-Type. Erlaubt ist das
+nur mit POST, PUT oder PATCH. Der Body der KI darf das Feld nicht selbst enthalten.
+
+TOTP: Bei `fill_login` schickt die App den aktuellen Code mit, sofern der Eintrag 2FA hat. Die
+Erweiterung setzt ihn nur ein, wenn die Seite kein Passwortfeld, aber ein Code-Feld zeigt
+(`autocomplete="one-time-code"`, typische Namen oder einzelne Ziffernfelder). Bei `http_request` gibt
+es kein TOTP-Einsetzen.
 
 ## 5. Bestätigungsablauf
 
@@ -177,9 +182,15 @@ claude mcp add remember-key -- "%LOCALAPPDATA%\Remember Key\remember-key-mcp.exe
      sendet sofort ab. Zweistufige Logins brauchen pro Schritt einen Aufruf.
    - Grenzen: Login-Formulare in iframes werden nicht ausgefüllt. In Zen/Firefox ist die Erweiterung
      ohne Signatur nur temporär ladbar (`about:debugging`).
-4. **Härtung**
-   - Windows Hello.
-   - `FormField` als Einsetz-Stelle, TOTP-Einsetzen.
+4. **Härtung** – umgesetzt
+   - Windows Hello: Mit der Einstellung `agentHello` muss jede Zustimmung zusätzlich mit PIN,
+     Fingerabdruck oder Gesicht bestätigt werden (`UserConsentVerifier` über dem App-Fenster).
+     Scheitert die Prüfung, bleibt die Anfrage offen.
+   - Body-Felder `form:` und `json:` sowie 2FA-Codes bei `fill_login` (siehe Abschnitt 4).
+   - Signierte Erweiterung für Zen/Firefox: `npm run sign:firefox` erzeugt eine Fassung ohne
+     Chrome-Felder und signiert sie unlisted über addons.mozilla.org. Die API-Schlüssel setzt der
+     Nutzer selbst als Umgebungsvariablen.
+   Weiterhin offen:
    - Optional: Befehlsvorlagen (`run_with_secret`, nur vom Nutzer angelegte Vorlagen).
    - Optional: Remember Key als Git-Credential-Helper.
 

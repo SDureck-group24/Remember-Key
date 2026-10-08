@@ -18,7 +18,28 @@ export interface EntrySummary {
 }
 
 /** Stelle, an der das Passwort in eine HTTP-Anfrage eingesetzt wird. */
-export type AuthLocation = { kind: "bearer" } | { kind: "basic" } | { kind: "header"; name: string };
+export type AuthLocation =
+  | { kind: "bearer" }
+  | { kind: "basic" }
+  | { kind: "header"; name: string }
+  | { kind: "formField"; name: string }
+  | { kind: "jsonField"; name: string };
+
+/** Lesbare Bezeichnung einer Einsetz-Stelle. */
+export function authLabel(a: AuthLocation): string {
+  switch (a.kind) {
+    case "bearer":
+      return "Bearer-Token";
+    case "basic":
+      return "Basic-Auth";
+    case "header":
+      return `Header ${a.name}`;
+    case "formField":
+      return `Formularfeld ${a.name}`;
+    case "jsonField":
+      return `JSON-Feld ${a.name}`;
+  }
+}
 
 /** Freigabe eines Eintrags für KI-Assistenten (MCP). */
 export interface AgentPolicy {
@@ -92,6 +113,8 @@ export interface Settings {
   autoLockMinutes: number;
   clipboardClearSeconds: number;
   agentEnabled: boolean;
+  /** Freigaben zusätzlich mit Windows Hello bestätigen. */
+  agentHello: boolean;
 }
 
 export type AgentOutcome = "ok" | "locked" | "disabled" | "rejected" | "denied" | "failed";
@@ -125,6 +148,7 @@ export interface AgentLogEntry {
 export interface AgentInfo {
   /** Pfad der MCP-Brücke; `null`, wenn sie nicht neben der App liegt. */
   bridgePath: string | null;
+  helloAvailable: boolean;
   /** Verbundene Browser-Erweiterungen, z. B. „Chrome“. */
   browsers: string[];
   /** Ordner der Erweiterung zum Laden als entpackte Erweiterung. */

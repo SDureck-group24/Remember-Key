@@ -17,6 +17,8 @@
     if (auth === "bearer") return "als Bearer-Token (Authorization-Header)";
     if (auth === "basic") return "als Basic-Anmeldung mit Benutzername";
     if (auth.startsWith("header:")) return `im Header ${auth.slice(7)}`;
+    if (auth.startsWith("form:")) return `im Formularfeld ${auth.slice(5)} des Bodys`;
+    if (auth.startsWith("json:")) return `im JSON-Feld ${auth.slice(5)} des Bodys`;
     return auth;
   }
 
@@ -49,13 +51,16 @@
     if (!current || busy) return;
     const id = current.id;
     busy = true;
+    error = "";
     try {
       await api.agentDecide(id, decision);
+      remove(id);
     } catch (e) {
+      // z. B. Windows Hello abgebrochen: Anfrage bleibt offen – erneut versuchen oder ablehnen.
       error = errorText(e);
+      if (decision === "deny") remove(id);
     } finally {
       busy = false;
-      remove(id);
     }
   }
 
@@ -80,7 +85,11 @@
         {#if current.action === "fill"}
           <dl>
             <dt>Aktion</dt>
-            <dd>Login im Browser ausfüllen und absenden</dd>
+            <dd>
+              Login im Browser ausfüllen und absenden{current.auth.includes("totp")
+                ? " – fragt die Seite nach einem 2FA-Code, wird der aktuelle Code eingesetzt"
+                : ""}
+            </dd>
             <dt>Seite</dt>
             <dd class="mono">{current.host}</dd>
           </dl>

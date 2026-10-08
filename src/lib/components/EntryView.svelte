@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { api, errorText, type CopyField, type EntryDetail } from "$lib/api";
+  import { api, authLabel, errorText, type CopyField, type EntryDetail } from "$lib/api";
   import { store } from "$lib/store.svelte";
   import Icon from "./Icon.svelte";
   import Totp from "./Totp.svelte";
@@ -179,9 +179,7 @@
           <span class="value grow">
             <Icon name="robot" size={14} /> Freigegeben für {detail.agent.hosts.join(", ")}
             {#if detail.agent.auth.length}
-              · Einsetzen als {detail.agent.auth
-                .map((a) => (a.kind === "bearer" ? "Bearer-Token" : a.kind === "basic" ? "Basic-Auth" : `Header ${a.name}`))
-                .join(", ")}
+              · Einsetzen als {detail.agent.auth.map(authLabel).join(", ")}
             {:else if !detail.agent.fillLogin}
               · nur Auflisten
             {/if}

@@ -121,8 +121,9 @@ fn tools() -> Value {
                     "body": { "type": "string", "description": "Request-Body (nicht bei GET/HEAD)." },
                     "auth": {
                         "type": "string",
-                        "description": "Einsetz-Stelle aus list_entries (bearer, basic, header:<Name>). Nur nötig, \
-                            wenn mehrere erlaubt sind."
+                        "description": "Einsetz-Stelle aus list_entries (bearer, basic, header:<Name>, form:<Name>, \
+                            json:<Name>). Nur nötig, wenn mehrere erlaubt sind. Bei form/json den Body ohne dieses Feld \
+                            schicken (Formular bzw. JSON-Objekt); Remember Key ergänzt es."
                     }
                 },
                 "required": ["entry_id", "url"],
@@ -133,7 +134,14 @@ fn tools() -> Value {
         {
             "name": "fill_login",
             "title": "Login im Browser ausfüllen",
-            "description": "Lässt Remember Key über seine Browser-Erweiterung das Login-Formular im offenen Tab                 ausfüllen und absenden – Benutzername und Passwort eines freigegebenen Eintrags (fillLogin in                 list_entries). Du siehst das Passwort nie und gibst es auch nicht selbst ein. Öffne vorher die                 Login-Seite; sie muss zu den Hosts des Eintrags passen. Der Nutzer bestätigt in Remember Key (bis zu                 60 Sekunden). Bei zweistufigen Logins (erst Benutzername, dann Passwort) einfach erneut aufrufen,                 sobald das Passwortfeld angezeigt wird. Lies das Passwortfeld danach nicht aus.",
+            "description": "Lässt Remember Key über seine Browser-Erweiterung das Login-Formular im offenen Tab \
+                ausfüllen und absenden – Benutzername und Passwort eines freigegebenen Eintrags (fillLogin in \
+                list_entries). Du siehst das Passwort nie und gibst es auch nicht selbst ein. Öffne vorher die \
+                Login-Seite; sie muss zu den Hosts des Eintrags passen. Der Nutzer bestätigt in Remember Key (bis zu \
+                60 Sekunden). Bei zweistufigen Logins (erst Benutzername, dann Passwort) einfach erneut aufrufen, \
+                sobald das Passwortfeld angezeigt wird. Hat der Eintrag 2FA (hasTotp), auf der Seite mit der \
+                Code-Abfrage erneut aufrufen – Remember Key setzt dann den aktuellen Code ein. Lies die Felder \
+                danach nicht aus.",
             "inputSchema": {
                 "type": "object",
                 "properties": {

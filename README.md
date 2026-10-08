@@ -57,7 +57,11 @@ Nach Änderungen am Designsystem `styles.css` neu kopieren.
 - `fill_login`: Die Browser-Erweiterung (`extension/`, für Chrome/Edge und Zen/Firefox) füllt nach Bestätigung
   Benutzername und Passwort im passenden Tab aus und sendet sofort ab. Sie ist über Native Messaging mit der App
   verbunden (`remember-key-browser.exe`). Die App registriert den Host beim Entsperren unter HKCU. Laden in Chrome:
-  `chrome://extensions` → Entwicklermodus → „Entpackte Erweiterung laden“ → Ordner `extension`.
+  `chrome://extensions` → Entwicklermodus → „Entpackte Erweiterung laden“ → Ordner `extension`. Hat der Eintrag 2FA,
+  setzt die Erweiterung auf der Code-Seite den aktuellen Code ein. Für Zen/Firefox erzeugt `npm run sign:firefox` eine
+  signierte, dauerhaft installierbare `.xpi` (API-Schlüssel von addons.mozilla.org als `WEB_EXT_API_KEY` und
+  `WEB_EXT_API_SECRET`).
+- Optional: Freigaben zusätzlich mit Windows Hello bestätigen (Einstellungen → KI-Zugriff).
 - Claude Code: Regel `mcp__remember-key` in `~/.claude/settings.json` unter `permissions.allow`, sonst kann der
   Auto-Modus Aufrufe blockieren, bevor sie Remember Key erreichen.
 

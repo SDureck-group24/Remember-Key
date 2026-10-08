@@ -69,6 +69,10 @@ pub enum BrowserCommand {
         host_hint: Option<String>,
         username: String,
         password: String,
+        /// Aktueller 2FA-Code, falls der Eintrag einen TOTP-Schlüssel hat. Die Erweiterung
+        /// setzt ihn nur ein, wenn die Seite nach einem Code fragt.
+        #[serde(default)]
+        otp: Option<String>,
     },
 }
 
@@ -455,6 +459,7 @@ mod tests {
             host_hint: None,
             username: "u".into(),
             password: "p".into(),
+            otp: None,
         };
         let json = serde_json::to_value(&cmd).unwrap();
         assert_eq!(json["type"], "fill");

@@ -162,6 +162,10 @@ pub enum AuthLocation {
     Basic,
     /// `<name>: <Passwort>`
     Header { name: String },
+    /// Feld `<name>` in einem Formular-Body (`application/x-www-form-urlencoded`).
+    FormField { name: String },
+    /// Feld `<name>` auf oberster Ebene eines JSON-Objekts im Body.
+    JsonField { name: String },
 }
 
 /// Header, die weder als Einsetz-Stelle noch von der KI gesetzt werden dürfen.
@@ -175,28 +179,54 @@ impl AuthLocation {
             Self::Bearer => "bearer".into(),
             Self::Basic => "basic".into(),
             Self::Header { name } => format!("header:{name}"),
+            Self::FormField { name } => format!("form:{name}"),
+            Self::JsonField { name } => format!("json:{name}"),
         }
     }
 
-    /// Name des Headers, in dem das Geheimnis landet.
-    pub fn header_name(&self) -> &str {
+    /// Name des Headers, in dem das Geheimnis landet; `None` bei Feldern im Body.
+    pub fn header_name(&self) -> Option<&str> {
         match self {
-            Self::Bearer | Self::Basic => "Authorization",
-            Self::Header { name } => name,
+            Self::Bearer | Self::Basic => Some("Authorization"),
+            Self::Header { name } => Some(name),
+            Self::FormField { .. } | Self::JsonField { .. } => None,
         }
     }
 
-    /// Prüft und normalisiert (Header-Name getrimmt, nur Token-Zeichen).
-    pub fn validated(&self) -> Result<Self> {
-        let Self::Header { name } = self else { return Ok(self.clone()) };
-        let name = name.trim();
-        let token = !name.is_empty()
-            && name.len() <= 64
-            && name.bytes().all(|b| b.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&b));
-        if !token || FORBIDDEN_HEADERS.contains(&name.to_ascii_lowercase().as_str()) {
-            return Err(Error::Invalid(format!("Ungültiger Header-Name: {name}")));
+    /// Name des Body-Felds, in dem das Geheimnis landet; `None` bei Headern.
+    pub fn body_field(&self) -> Option<&str> {
+        match self {
+            Self::FormField { name } | Self::JsonField { name } => Some(name),
+            _ => None,
         }
-        Ok(Self::Header { name: name.to_string() })
+    }
+
+    /// Prüft und normalisiert (Namen getrimmt; Header nur aus Token-Zeichen).
+    pub fn validated(&self) -> Result<Self> {
+        match self {
+            Self::Bearer | Self::Basic => Ok(self.clone()),
+            Self::Header { name } => {
+                let name = name.trim();
+                let token = !name.is_empty()
+                    && name.len() <= 64
+                    && name.bytes().all(|b| b.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&b));
+                if !token || FORBIDDEN_HEADERS.contains(&name.to_ascii_lowercase().as_str()) {
+                    return Err(Error::Invalid(format!("Ungültiger Header-Name: {name}")));
+                }
+                Ok(Self::Header { name: name.to_string() })
+            }
+            Self::FormField { name } | Self::JsonField { name } => {
+                let trimmed = name.trim();
+                if trimmed.is_empty() || trimmed.chars().count() > 64 || trimmed.chars().any(char::is_control) {
+                    return Err(Error::Invalid(format!("Ungültiger Feldname: {trimmed}")));
+                }
+                let name = trimmed.to_string();
+                Ok(match self {
+                    Self::FormField { .. } => Self::FormField { name },
+                    _ => Self::JsonField { name },
+                })
+            }
+        }
     }
 }
 
@@ -264,11 +294,14 @@ pub struct Settings {
     /// KI-Assistenten dürfen über die MCP-Brücke auf freigegebene Einträge zugreifen.
     #[serde(default)]
     pub agent_enabled: bool,
+    /// Freigaben von KI-Anfragen zusätzlich mit Windows Hello bestätigen.
+    #[serde(default)]
+    pub agent_hello: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { auto_lock_minutes: 5, clipboard_clear_seconds: 30, updated_at: 0, agent_enabled: false }
+        Self { auto_lock_minutes: 5, clipboard_clear_seconds: 30, updated_at: 0, agent_enabled: false, agent_hello: false }
     }
 }
 
@@ -410,7 +443,8 @@ impl VaultData {
 
         self.key_changed_at = self.key_changed_at.max(other.key_changed_at);
         let s = other.settings;
-        let key = |s: &Settings| (s.updated_at, s.auto_lock_minutes, s.clipboard_clear_seconds, s.agent_enabled);
+        let key =
+            |s: &Settings| (s.updated_at, s.auto_lock_minutes, s.clipboard_clear_seconds, s.agent_enabled, s.agent_hello);
         if key(&s) > key(&self.settings) {
             self.settings = s;
         }
@@ -933,7 +967,7 @@ mod tests {
     fn merge_settings_newer_wins() {
         let mut a = VaultData::default();
         let mut b = VaultData::default();
-        b.settings = Settings { auto_lock_minutes: 15, clipboard_clear_seconds: 30, updated_at: 9, agent_enabled: true };
+        b.settings = Settings { auto_lock_minutes: 15, clipboard_clear_seconds: 30, updated_at: 9, agent_enabled: true, agent_hello: false };
         a.merge(&b);
         assert_eq!(a.settings.auto_lock_minutes, 15);
         assert!(a.settings.agent_enabled);
@@ -975,6 +1009,13 @@ mod tests {
         for bad in ["", "X Key", "Cookie", "host", "X:Key", "Ä"] {
             assert!(AuthLocation::Header { name: bad.into() }.validated().is_err(), "{bad}");
         }
+        assert_eq!(
+            AuthLocation::JsonField { name: " password ".into() }.validated().unwrap(),
+            AuthLocation::JsonField { name: "password".into() }
+        );
+        assert!(AuthLocation::FormField { name: "".into() }.validated().is_err());
+        assert!(AuthLocation::FormField { name: "a\nb".into() }.validated().is_err());
+        assert_eq!(AuthLocation::FormField { name: "pw".into() }.key(), "form:pw");
         let json = serde_json::to_string(&vec![AuthLocation::Bearer, AuthLocation::Header { name: "X".into() }]).unwrap();
         assert_eq!(json, r#"[{"kind":"bearer"},{"kind":"header","name":"X"}]"#);
         // Phase-1-Freigaben ohne neue Felder laden weiter.

@@ -3,6 +3,7 @@ mod clipboard;
 mod error;
 mod gdrive;
 mod generator;
+mod hello;
 mod session;
 mod strength;
 mod sync;
@@ -592,8 +593,11 @@ fn get_settings(state: State<'_, AppState>) -> Result<Settings> {
 }
 
 #[tauri::command]
-fn set_settings(state: State<'_, AppState>, mut settings: Settings) -> Result<()> {
+async fn set_settings(state: State<'_, AppState>, mut settings: Settings) -> Result<()> {
     settings.validate()?;
+    if settings.agent_hello && !blocking(hello::available).await? {
+        return Err(Error::Invalid("Windows Hello ist auf diesem Gerät nicht eingerichtet".into()));
+    }
     settings.updated_at = now();
     if settings.agent_enabled {
         agent::register_browser_host();
@@ -610,6 +614,8 @@ fn set_settings(state: State<'_, AppState>, mut settings: Settings) -> Result<()
 struct AgentInfo {
     /// Pfad der MCP-Brücke; `None`, wenn sie nicht neben der App liegt.
     bridge_path: Option<String>,
+    /// Windows Hello ist eingerichtet und kann für Freigaben verlangt werden.
+    hello_available: bool,
     /// Verbundene Browser-Erweiterungen.
     browsers: Vec<String>,
     /// Ordner der Erweiterung zum Laden als „entpackte Erweiterung“.
@@ -619,8 +625,9 @@ struct AgentInfo {
 }
 
 #[tauri::command]
-fn agent_info(app: AppHandle, state: State<'_, AppState>) -> Result<AgentInfo> {
+async fn agent_info(app: AppHandle, state: State<'_, AppState>) -> Result<AgentInfo> {
     state.lock().vault()?;
+    let hello_available = blocking(hello::available).await?;
     let extension_dir = app
         .path()
         .resource_dir()
@@ -630,6 +637,7 @@ fn agent_info(app: AppHandle, state: State<'_, AppState>) -> Result<AgentInfo> {
         .map(|d| d.display().to_string());
     Ok(AgentInfo {
         bridge_path: agent::bridge_path().map(|p| p.display().to_string()),
+        hello_available,
         browsers: agent::browsers(),
         extension_dir,
         extension_id: rk_agent::CHROME_EXTENSION_ID,
@@ -644,9 +652,22 @@ fn agent_pending(state: State<'_, AppState>) -> Result<Vec<agent::Pending>> {
     Ok(agent::pending())
 }
 
+/// Führt eine blockierende Funktion außerhalb des Haupt-Threads aus.
+async fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> Result<T> {
+    tauri::async_runtime::spawn_blocking(f).await.map_err(|e| Error::Invalid(e.to_string()))
+}
+
+/// Mit `agent_hello` muss jede Zustimmung zusätzlich per Windows Hello bestätigt werden.
+/// Scheitert die Prüfung, bleibt die Anfrage offen (erneut versuchen oder ablehnen).
 #[tauri::command]
-fn agent_decide(state: State<'_, AppState>, id: u64, decision: agent::Decision) -> Result<()> {
-    state.lock().vault()?;
+async fn agent_decide(app: AppHandle, id: u64, decision: agent::Decision) -> Result<()> {
+    let require_hello = app.state::<AppState>().lock().vault()?.data.settings.agent_hello;
+    if require_hello && decision != agent::Decision::Deny {
+        let hwnd = app.get_webview_window("main").and_then(|w| w.hwnd().ok()).map(|h| h.0 as isize).unwrap_or(0);
+        blocking(move || hello::verify(hwnd, "Remember Key: Zugangsdaten für den KI-Assistenten freigeben"))
+            .await?
+            .map_err(Error::Invalid)?;
+    }
     if agent::decide(id, decision) {
         Ok(())
     } else {

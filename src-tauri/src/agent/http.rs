@@ -141,7 +141,8 @@ pub fn prepare(req: &HttpRequest, policy: &AgentPolicy) -> Result<Prepared, Stri
         if !token {
             return Err(format!("Ungültiger Header-Name: {name}"));
         }
-        if lower == "authorization" || lower == auth.header_name().to_ascii_lowercase() || FORBIDDEN_HEADERS.contains(&lower.as_str())
+        let secret_header = auth.header_name().is_some_and(|h| h.eq_ignore_ascii_case(&lower));
+        if lower == "authorization" || secret_header || FORBIDDEN_HEADERS.contains(&lower.as_str())
         {
             return Err(format!("Header {name} darf nicht gesetzt werden – Remember Key setzt die Anmeldung selbst"));
         }
@@ -154,8 +155,73 @@ pub fn prepare(req: &HttpRequest, policy: &AgentPolicy) -> Result<Prepared, Stri
     if req.body.is_some() && matches!(method.as_str(), "GET" | "HEAD") {
         return Err(format!("{method}-Anfragen haben keinen Body"));
     }
+    check_body_field(&auth, &method, &headers, req.body.as_deref())?;
 
     Ok(Prepared { method, url, host, headers, body: req.body.clone(), auth })
+}
+
+/// Content-Type, den ein Body mit eingesetztem Feld haben muss.
+fn body_content_type(auth: &AuthLocation) -> Option<&'static str> {
+    match auth {
+        AuthLocation::FormField { .. } => Some("application/x-www-form-urlencoded"),
+        AuthLocation::JsonField { .. } => Some("application/json"),
+        _ => None,
+    }
+}
+
+/// Bei Feldern im Body: passende Methode und passender Content-Type; der Body der KI darf
+/// das Feld nicht selbst enthalten.
+fn check_body_field(auth: &AuthLocation, method: &str, headers: &[(String, String)], body: Option<&str>) -> Result<(), String> {
+    let (Some(field), Some(ct)) = (auth.body_field(), body_content_type(auth)) else { return Ok(()) };
+    if !matches!(method, "POST" | "PUT" | "PATCH") {
+        return Err(format!("Einsetzen in ein Body-Feld geht nur mit POST, PUT oder PATCH, nicht mit {method}"));
+    }
+    if let Some((_, v)) = headers.iter().find(|(n, _)| n.eq_ignore_ascii_case("content-type")) {
+        if !v.trim().to_ascii_lowercase().starts_with(ct) {
+            return Err(format!("Content-Type muss {ct} sein (oder weglassen)"));
+        }
+    }
+    let Some(body) = body.filter(|b| !b.trim().is_empty()) else { return Ok(()) };
+    match auth {
+        AuthLocation::FormField { .. } => {
+            if url::form_urlencoded::parse(body.as_bytes()).any(|(k, _)| k == field) {
+                return Err(format!("Das Feld {field} setzt Remember Key selbst – bitte aus dem Body entfernen"));
+            }
+        }
+        _ => {
+            let value: Value = serde_json::from_str(body).map_err(|_| "Body muss gültiges JSON sein".to_string())?;
+            let obj = value.as_object().ok_or("JSON-Body muss ein Objekt sein")?;
+            if obj.contains_key(field) {
+                return Err(format!("Das Feld {field} setzt Remember Key selbst – bitte aus dem Body entfernen"));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Body mit eingesetztem Geheimnis (nur bei Body-Feldern).
+fn body_with_secret(auth: &AuthLocation, body: Option<&str>, secret: &str) -> Result<Option<Zeroizing<String>>, String> {
+    let base = body.map(str::trim).filter(|b| !b.is_empty());
+    match auth {
+        AuthLocation::FormField { name } => {
+            let mut ser = url::form_urlencoded::Serializer::new(base.unwrap_or_default().to_string());
+            ser.append_pair(name, secret);
+            Ok(Some(Zeroizing::new(ser.finish())))
+        }
+        AuthLocation::JsonField { name } => {
+            let mut obj = match base {
+                Some(b) => serde_json::from_str::<Map<String, Value>>(b).map_err(|_| "JSON-Body muss ein Objekt sein")?,
+                None => Map::new(),
+            };
+            obj.insert(name.clone(), Value::String(secret.to_string()));
+            let text = Zeroizing::new(serde_json::to_string(&obj).map_err(|e| e.to_string())?);
+            if let Some(Value::String(s)) = obj.get_mut(name) {
+                zeroize::Zeroize::zeroize(s);
+            }
+            Ok(Some(text))
+        }
+        _ => Ok(None),
+    }
 }
 
 fn choose_auth(requested: Option<&str>, allowed: &[AuthLocation]) -> Result<AuthLocation, String> {
@@ -182,7 +248,9 @@ fn auth_value(auth: &AuthLocation, username: &str, password: &str) -> Zeroizing<
             let pair = Zeroizing::new(format!("{username}:{password}"));
             format!("Basic {}", BASE64.encode(pair.as_bytes()))
         }
-        AuthLocation::Header { .. } => password.to_string(),
+        AuthLocation::Header { .. } | AuthLocation::FormField { .. } | AuthLocation::JsonField { .. } => {
+            password.to_string()
+        }
     })
 }
 
@@ -198,14 +266,23 @@ pub fn execute(p: &Prepared, c: &Credentials) -> Result<Value, String> {
     for (name, value) in &p.headers {
         request = request.set(name, value);
     }
-    let value = auth_value(&p.auth, &c.username, &c.secret);
-    request = request.set(p.auth.header_name(), &value);
-    drop(value);
+    if let Some(header) = p.auth.header_name() {
+        let value = auth_value(&p.auth, &c.username, &c.secret);
+        request = request.set(header, &value);
+    }
+    let secret_body = body_with_secret(&p.auth, p.body.as_deref(), &c.secret)?;
+    if let Some(ct) = body_content_type(&p.auth) {
+        if !p.headers.iter().any(|(n, _)| n.eq_ignore_ascii_case("content-type")) {
+            request = request.set("Content-Type", ct);
+        }
+    }
 
-    let result = match &p.body {
-        Some(body) => request.send_string(body),
-        None => request.call(),
+    let result = match (&secret_body, &p.body) {
+        (Some(body), _) => request.send_string(body),
+        (None, Some(body)) => request.send_string(body),
+        (None, None) => request.call(),
     };
+    drop(secret_body);
     let response = match result {
         Ok(r) | Err(ureq::Error::Status(_, r)) => r,
         Err(ureq::Error::Transport(t)) => {
@@ -261,7 +338,13 @@ pub fn execute(p: &Prepared, c: &Credentials) -> Result<Value, String> {
 
 /// Beschreibt die Einsetz-Stelle, ohne etwas über das Geheimnis zu verraten.
 fn injected(auth: &AuthLocation, c: &Credentials) -> Value {
-    let mut v = json!({ "location": auth.key(), "header": auth.header_name(), "secret": c.source.key() });
+    let mut v = json!({ "location": auth.key(), "secret": c.source.key() });
+    if let Some(h) = auth.header_name() {
+        v["header"] = json!(h);
+    }
+    if let Some(f) = auth.body_field() {
+        v["field"] = json!(f);
+    }
     if *auth == AuthLocation::Basic {
         v["withUsername"] = json!(!c.username.is_empty());
     }
@@ -483,6 +566,39 @@ mod tests {
     }
 
     #[test]
+    fn body_fields_are_checked_and_filled() {
+        let form = policy(vec![AuthLocation::FormField { name: "password".into() }]);
+        let mut r = req("https://api.github.com/login");
+        assert!(prepare(&r, &form).is_err(), "GET mit Body-Feld");
+        r.method = "POST".into();
+        r.body = Some("user=me&password=x".into());
+        assert!(prepare(&r, &form).is_err(), "Feld schon im Body");
+        r.body = Some("user=me".into());
+        r.headers.insert("Content-Type".into(), "application/json".into());
+        assert!(prepare(&r, &form).is_err(), "falscher Content-Type");
+        r.headers.clear();
+        let p = prepare(&r, &form).unwrap();
+        let body = body_with_secret(&p.auth, p.body.as_deref(), "a&b=c").unwrap().unwrap();
+        assert_eq!(body.as_str(), "user=me&password=a%26b%3Dc");
+
+        let json_pol = policy(vec![AuthLocation::JsonField { name: "token".into() }]);
+        let mut r = req("https://api.github.com/login");
+        r.method = "POST".into();
+        r.body = Some(r#"{"user":"me","token":"x"}"#.into());
+        assert!(prepare(&r, &json_pol).is_err());
+        r.body = Some("[1]".into());
+        assert!(prepare(&r, &json_pol).is_err());
+        r.body = Some(r#"{"user":"me"}"#.into());
+        let p = prepare(&r, &json_pol).unwrap();
+        let body = body_with_secret(&p.auth, p.body.as_deref(), "geheim\"1").unwrap().unwrap();
+        let v: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["user"], "me");
+        assert_eq!(v["token"], "geheim\"1");
+        // Ohne Body der KI: nur das Feld
+        assert_eq!(body_with_secret(&p.auth, None, "s").unwrap().unwrap().as_str(), r#"{"token":"s"}"#);
+    }
+
+    #[test]
     fn auth_values() {
         assert_eq!(*auth_value(&AuthLocation::Bearer, "u", "pw"), "Bearer pw");
         assert_eq!(*auth_value(&AuthLocation::Basic, "u", "pw"), "Basic dTpwdw==");
@@ -522,9 +638,20 @@ mod tests {
     #[ignore]
     fn echo_service_reflection_is_redacted() {
         let pw = "dummy-Geheimnis-7f3a";
-        for auth in [AuthLocation::Bearer, AuthLocation::Basic, AuthLocation::Header { name: "X-Api-Key".into() }] {
+        for auth in [
+            AuthLocation::Bearer,
+            AuthLocation::Basic,
+            AuthLocation::Header { name: "X-Api-Key".into() },
+            AuthLocation::FormField { name: "password".into() },
+            AuthLocation::JsonField { name: "password".into() },
+        ] {
+            let body_field = auth.body_field().is_some();
             let pol = AgentPolicy { enabled: true, hosts: vec!["httpbin.org".into()], auth: vec![auth], session_minutes: 0, fill_login: false };
-            let p = prepare(&req("https://httpbin.org/anything?probe=1"), &pol).unwrap();
+            let mut r = req("https://httpbin.org/anything?probe=1");
+            if body_field {
+                r.method = "POST".into();
+            }
+            let p = prepare(&r, &pol).unwrap();
             let mut e = entry(pw, "");
             e.username = "tester".into();
             let out = execute(&p, &Credentials::from_entry(&e).unwrap()).unwrap();

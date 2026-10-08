@@ -87,7 +87,7 @@ function tabMatches(tab, hosts, hint) {
   }
 }
 
-async function fill({ hosts, hostHint, username, password }) {
+async function fill({ hosts, hostHint, username, password, otp }) {
   const tabs = (await chrome.tabs.query({})).filter((t) => tabMatches(t, hosts, hostHint));
   if (!tabs.length) {
     throw new Error(`Kein offener Tab mit ${hostHint ?? hosts.join(", ")} in diesem Browser`);
@@ -98,7 +98,7 @@ async function fill({ hosts, hostHint, username, password }) {
   const [res] = await chrome.scripting.executeScript({
     target: { tabId: tab.id },
     func: fillInPage,
-    args: [hosts, username, password],
+    args: [hosts, username, password, otp ?? null],
   });
   const r = res?.result;
   if (!r?.ok) throw new Error(r?.error ?? "Ausfüllen fehlgeschlagen");
@@ -106,7 +106,7 @@ async function fill({ hosts, hostHint, username, password }) {
 }
 
 // Läuft in der Seite (isolierte Welt der Erweiterung). Muss in sich abgeschlossen sein.
-function fillInPage(hosts, username, password) {
+function fillInPage(hosts, username, password, otp) {
   const host = location.hostname.toLowerCase().replace(/\.$/, "");
   const allowed = hosts.some((h) =>
     h.startsWith("*.") ? host.endsWith(h.slice(1)) && host.length > h.length - 1 : h === host,
@@ -129,6 +129,55 @@ function fillInPage(hosts, username, password) {
     ...scope.querySelectorAll('input[type="email"], input[type="text"], input[type="tel"], input:not([type])'),
   ].filter(usable);
 
+  // Mehrstufige Logins: Seite mit Code-Abfrage (2FA), wenn kein Passwortfeld da ist.
+  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
+  const set = (el, value) => {
+    el.focus();
+    setter.call(el, value);
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+  };
+  const submit = (field) => {
+    const form = field.form;
+    const button = [
+      ...(form ?? document).querySelectorAll('button[type="submit"], input[type="submit"], button:not([type])'),
+    ].find(usable);
+    if (form && typeof form.requestSubmit === "function") {
+      try {
+        form.requestSubmit(button && form.contains(button) ? button : undefined);
+        return true;
+      } catch {}
+    }
+    if (button) {
+      button.click();
+      return true;
+    }
+    for (const type of ["keydown", "keypress", "keyup"]) {
+      field.dispatchEvent(new KeyboardEvent(type, { key: "Enter", code: "Enter", keyCode: 13, bubbles: true }));
+    }
+    return true;
+  };
+  if (!pw && otp) {
+    const textLike = (i) => ["text", "tel", "number"].includes(i.type);
+    const inputs = [...document.querySelectorAll("input")].filter((i) => usable(i) && textLike(i));
+    // Einzelne Kästchen je Ziffer
+    const boxes = inputs.filter((i) => i.maxLength === 1);
+    if (boxes.length >= otp.length) {
+      [...otp].forEach((digit, k) => set(boxes[k], digit));
+      return { ok: true, filled: ["otp"], submitted: submit(boxes[otp.length - 1]) };
+    }
+    const otpHint = /otp|totp|2fa|mfa|one.?time|verif|code|token|pin/i;
+    const field = inputs.find(
+      (i) =>
+        i.autocomplete === "one-time-code" ||
+        otpHint.test(`${i.name} ${i.id} ${i.placeholder ?? ""} ${i.getAttribute("aria-label") ?? ""}`),
+    );
+    if (field) {
+      set(field, otp);
+      return { ok: true, filled: ["otp"], submitted: submit(field) };
+    }
+  }
+
   let user = null;
   if (pw) {
     // Das letzte Textfeld vor dem Passwortfeld.
@@ -142,14 +191,6 @@ function fillInPage(hosts, username, password) {
   }
   if (!pw && !user) return { ok: false, error: "Kein Login-Formular auf der Seite gefunden" };
 
-  // Über den nativen Setter, damit Frameworks wie React die Änderung bemerken.
-  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
-  const set = (el, value) => {
-    el.focus();
-    setter.call(el, value);
-    el.dispatchEvent(new Event("input", { bubbles: true }));
-    el.dispatchEvent(new Event("change", { bubbles: true }));
-  };
   const filled = [];
   if (user && username) {
     set(user, username);
@@ -161,27 +202,5 @@ function fillInPage(hosts, username, password) {
   }
 
   // Sofort absenden, damit das Passwort möglichst kurz im Feld steht.
-  const field = pw ?? user;
-  const form = field.form;
-  const button = [
-    ...(form ?? document).querySelectorAll('button[type="submit"], input[type="submit"], button:not([type])'),
-  ].find(usable);
-  let submitted = false;
-  if (form && typeof form.requestSubmit === "function") {
-    try {
-      form.requestSubmit(button && form.contains(button) ? button : undefined);
-      submitted = true;
-    } catch {}
-  }
-  if (!submitted && button) {
-    button.click();
-    submitted = true;
-  }
-  if (!submitted) {
-    for (const type of ["keydown", "keypress", "keyup"]) {
-      field.dispatchEvent(new KeyboardEvent(type, { key: "Enter", code: "Enter", keyCode: 13, bubbles: true }));
-    }
-    submitted = true;
-  }
-  return { ok: true, filled, submitted };
+  return { ok: true, filled, submitted: submit(pw ?? user) };
 }
