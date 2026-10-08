@@ -1,6 +1,14 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { api, defaultGenOptions, errorText, flattenFolders, type EntryInput } from "$lib/api";
+  import {
+    api,
+    defaultGenOptions,
+    errorText,
+    flattenFolders,
+    MAX_SESSION_MINUTES,
+    type AuthLocation,
+    type EntryInput,
+  } from "$lib/api";
   import { store } from "$lib/store.svelte";
   import Generator from "./Generator.svelte";
   import Icon from "./Icon.svelte";
@@ -25,9 +33,20 @@
   let password = $state("");
   let passwordTouched = $state(false);
   let hasStoredPassword = $state(false);
+  // API-Token: wie das Passwort nur im Formular, wenn neu, geändert oder geladen.
+  let apiToken = $state("");
+  let apiTokenTouched = $state(false);
+  let hasStoredApiToken = $state(false);
+  let revealToken = $state(false);
   let agentEnabled = $state(false);
   let agentHosts = $state("");
-  let form = $state<Omit<EntryInput, "password" | "agent">>({
+  // Einsetz-Stellen für HTTP-Anfragen; neue Freigaben starten mit Bearer-Token.
+  let authBearer = $state(true);
+  let authBasic = $state(false);
+  let authHeader = $state(false);
+  let authHeaderName = $state("");
+  let sessionMinutes = $state(0);
+  let form = $state<Omit<EntryInput, "password" | "apiToken" | "agent">>({
     id: null,
     title: "",
     username: "",
@@ -47,6 +66,7 @@
       try {
         const d = await api.get(id);
         hasStoredPassword = d.hasPassword;
+        hasStoredApiToken = d.hasApiToken;
         form = {
           id: d.id,
           title: d.title,
@@ -58,6 +78,14 @@
         };
         agentEnabled = d.agent.enabled;
         agentHosts = d.agent.hosts.join(", ");
+        if (d.agent.enabled || d.agent.hosts.length) {
+          const header = d.agent.auth.find((a) => a.kind === "header");
+          authBearer = d.agent.auth.some((a) => a.kind === "bearer");
+          authBasic = d.agent.auth.some((a) => a.kind === "basic");
+          authHeader = !!header;
+          authHeaderName = header?.kind === "header" ? header.name : "";
+        }
+        sessionMinutes = d.agent.sessionMinutes;
       } catch (e) {
         error = errorText(e);
       }
@@ -80,6 +108,19 @@
     reveal = !reveal;
   }
 
+  async function toggleRevealToken() {
+    if (!revealToken && id && hasStoredApiToken && !apiTokenTouched) {
+      try {
+        apiToken = await api.revealApiToken(id);
+        apiTokenTouched = true;
+      } catch (e) {
+        error = errorText(e);
+        return;
+      }
+    }
+    revealToken = !revealToken;
+  }
+
   async function quickGenerate() {
     try {
       password = (await api.generate(defaultGenOptions)).password;
@@ -95,8 +136,24 @@
     busy = true;
     error = "";
     try {
-      const agent = { enabled: agentEnabled, hosts: agentHosts.split(/[\s,;]+/).filter(Boolean) };
-      onsaved(await api.save({ ...form, password: !id || passwordTouched ? password : null, agent }));
+      const auth: AuthLocation[] = [];
+      if (authBearer) auth.push({ kind: "bearer" });
+      if (authBasic) auth.push({ kind: "basic" });
+      if (authHeader && authHeaderName.trim()) auth.push({ kind: "header", name: authHeaderName.trim() });
+      const agent = {
+        enabled: agentEnabled,
+        hosts: agentHosts.split(/[\s,;]+/).filter(Boolean),
+        auth,
+        sessionMinutes: Number(sessionMinutes) || 0,
+      };
+      onsaved(
+        await api.save({
+          ...form,
+          password: !id || passwordTouched ? password : null,
+          apiToken: !id || apiTokenTouched ? apiToken : null,
+          agent,
+        }),
+      );
     } catch (err) {
       error = errorText(err);
     } finally {
@@ -168,6 +225,32 @@
     </div>
 
     <div class="field">
+      <label for="api-token">API-Token</label>
+      <div class="row">
+        <input
+          id="api-token"
+          class="input mono grow"
+          type={revealToken ? "text" : "password"}
+          bind:value={apiToken}
+          oninput={() => (apiTokenTouched = true)}
+          placeholder={id && hasStoredApiToken && !apiTokenTouched ? "Unverändert – zum Ändern neu eingeben" : "Optional"}
+          autocomplete="off"
+          spellcheck="false"
+        />
+        <button
+          type="button"
+          class="btn btn-icon btn-secondary"
+          title={revealToken ? "Verbergen" : "Anzeigen"}
+          aria-label={revealToken ? "API-Token verbergen" : "API-Token anzeigen"}
+          onclick={toggleRevealToken}
+        >
+          <Icon name={revealToken ? "eye-slash" : "eye"} size={16} />
+        </button>
+      </div>
+      <div class="hint">Für Programm- und KI-Zugriffe auf eine API. Wird statt des Passworts eingesetzt, wenn vorhanden.</div>
+    </div>
+
+    <div class="field">
       <label for="url">Website</label>
       <input id="url" class="input" bind:value={form.url} spellcheck="false" placeholder="https://" />
     </div>
@@ -208,10 +291,47 @@
           aria-label="Erlaubte Hosts"
           placeholder="Leer = Host der Website, z. B. api.github.com, *.example.com"
         />
+
+        <span class="lbl sub">Passwort in HTTPS-Anfragen einsetzen</span>
+        <div class="seg">
+          <label class="seg-opt" title="Authorization: Bearer <Passwort>">
+            <input type="checkbox" bind:checked={authBearer} /> Bearer-Token
+          </label>
+          <label class="seg-opt" title="Authorization: Basic <Benutzername:Passwort>">
+            <input type="checkbox" bind:checked={authBasic} /> Basic-Auth
+          </label>
+          <label class="seg-opt" title="Eigener Header mit dem Passwort als Wert">
+            <input type="checkbox" bind:checked={authHeader} /> Eigener Header
+          </label>
+        </div>
+        {#if authBearer || authBasic || authHeader}
+          <div class="hint">
+            Eingesetzt wird der API-Token, falls hinterlegt, sonst das Passwort. Die meisten APIs akzeptieren kein
+            Login-Passwort. Nur https – http ist ausschließlich für localhost erlaubt.
+          </div>
+        {/if}
+        {#if authHeader}
+          <input
+            class="input hosts mono"
+            bind:value={authHeaderName}
+            spellcheck="false"
+            autocomplete="off"
+            aria-label="Header-Name"
+            placeholder="Header-Name, z. B. X-Api-Key"
+          />
+        {/if}
+
+        <label class="lbl sub" for="agent-session">Bestätigung</label>
+        <select id="agent-session" class="input" bind:value={sessionMinutes}>
+          <option value={0}>Jede Anfrage einzeln bestätigen</option>
+          {#each [5, 15, 30, MAX_SESSION_MINUTES] as m (m)}
+            <option value={m}>Freigabe für {m} Minuten erlauben</option>
+          {/each}
+        </select>
       {/if}
       <div class="hint">
-        Die KI sieht nur Titel, Benutzername und Hosts – nie das Passwort. Zugangsdaten werden nur an die genannten
-        Hosts gebunden.
+        Die KI sieht nur Titel, Benutzername und Hosts – nie das Passwort. Remember Key setzt es nach deiner Bestätigung
+        selbst ein, nur an den genannten Hosts und nur an den gewählten Stellen.
       </div>
     </div>
 
@@ -261,5 +381,8 @@
   }
   .hosts {
     margin-top: var(--space-3);
+  }
+  .lbl.sub {
+    margin-top: var(--space-4);
   }
 </style>

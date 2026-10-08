@@ -77,6 +77,7 @@ impl Inner {
 
     fn lock_vault(&mut self) {
         self.vault = None; // Drop nullt Schlüssel und Inhalte
+        agent::reset_approvals();
         if let Some(seq) = self.clipboard_seq.take() {
             clipboard::clear_if_unchanged(seq);
         }
@@ -143,6 +144,7 @@ struct EntryDetail {
     title: String,
     username: String,
     has_password: bool,
+    has_api_token: bool,
     url: String,
     notes: String,
     totp: String,
@@ -161,6 +163,9 @@ struct EntryInput {
     username: String,
     /// `None` = beim Bearbeiten unverändert lassen.
     password: Option<String>,
+    /// `None` = beim Bearbeiten unverändert lassen.
+    #[serde(default)]
+    api_token: Option<String>,
     url: String,
     notes: String,
     totp: String,
@@ -332,6 +337,7 @@ fn get_entry(state: State<'_, AppState>, id: String) -> Result<EntryDetail> {
         title: e.title.clone(),
         username: e.username.clone(),
         has_password: !e.password.is_empty(),
+        has_api_token: !e.api_token.is_empty(),
         url: e.url.clone(),
         notes: e.notes.clone(),
         totp: e.totp.as_ref().map(totp::to_input).unwrap_or_default(),
@@ -347,6 +353,13 @@ fn reveal_password(state: State<'_, AppState>, id: String) -> Result<SecretStrin
     let mut g = state.lock();
     let e = g.vault()?.data.entries.iter().find(|e| e.id == id).ok_or(Error::NotFound)?;
     Ok(SecretString(e.password.clone()))
+}
+
+#[tauri::command]
+fn reveal_api_token(state: State<'_, AppState>, id: String) -> Result<SecretString> {
+    let mut g = state.lock();
+    let e = g.vault()?.data.entries.iter().find(|e| e.id == id).ok_or(Error::NotFound)?;
+    Ok(SecretString(e.api_token.clone()))
 }
 
 #[tauri::command]
@@ -371,6 +384,9 @@ fn save_entry(state: State<'_, AppState>, entry: EntryInput) -> Result<String> {
             if let Some(pw) = &entry.password {
                 e.password = pw.clone();
             }
+            if let Some(t) = &entry.api_token {
+                e.api_token = t.trim().to_string();
+            }
             e.url = entry.url.trim().to_string();
             e.notes = entry.notes.clone();
             e.totp = totp_cfg;
@@ -386,6 +402,7 @@ fn save_entry(state: State<'_, AppState>, entry: EntryInput) -> Result<String> {
                 title: entry.title.trim().to_string(),
                 username: entry.username.clone(),
                 password: entry.password.clone().unwrap_or_default(),
+                api_token: entry.api_token.as_deref().map(str::trim).unwrap_or_default().to_string(),
                 url: entry.url.trim().to_string(),
                 notes: entry.notes.clone(),
                 totp: totp_cfg,
@@ -422,7 +439,21 @@ fn agent_policy(input: &AgentPolicy, url: &str) -> Result<Option<AgentPolicy>> {
             "Für die KI-Freigabe wird ein Host oder eine Website-Adresse benötigt".into(),
         ));
     }
-    Ok((input.enabled || !hosts.is_empty()).then(|| AgentPolicy { enabled: input.enabled, hosts }))
+    let mut auth: Vec<vault::AuthLocation> = Vec::new();
+    for a in &input.auth {
+        let a = a.validated()?;
+        if !auth.contains(&a) {
+            auth.push(a);
+        }
+    }
+    if input.session_minutes > vault::MAX_SESSION_MINUTES {
+        return Err(Error::Invalid(format!(
+            "Eine Sitzungsfreigabe darf höchstens {} Minuten gelten",
+            vault::MAX_SESSION_MINUTES
+        )));
+    }
+    let keep = input.enabled || !hosts.is_empty();
+    Ok(keep.then_some(AgentPolicy { enabled: input.enabled, hosts, auth, session_minutes: input.session_minutes }))
 }
 
 #[tauri::command]
@@ -507,6 +538,7 @@ fn copy_field(state: State<'_, AppState>, id: String, field: String) -> Result<u
     let value = Zeroizing::new(match field.as_str() {
         "username" => e.username.clone(),
         "password" => e.password.clone(),
+        "apiToken" => e.api_token.clone(),
         "totp" => {
             let cfg = e.totp.as_ref().ok_or(Error::Invalid("Kein TOTP hinterlegt".into()))?;
             totp::generate(cfg, now() as u64)?.0
@@ -575,6 +607,23 @@ fn agent_info(state: State<'_, AppState>) -> Result<AgentInfo> {
         bridge_path: agent::bridge_path().map(|p| p.display().to_string()),
         log: agent::read_log(200),
     })
+}
+
+/// Offene Bestätigungen (z. B. wenn das Fenster beim Ereignis noch nicht bereit war).
+#[tauri::command]
+fn agent_pending(state: State<'_, AppState>) -> Result<Vec<agent::Pending>> {
+    state.lock().vault()?;
+    Ok(agent::pending())
+}
+
+#[tauri::command]
+fn agent_decide(state: State<'_, AppState>, id: u64, decision: agent::Decision) -> Result<()> {
+    state.lock().vault()?;
+    if agent::decide(id, decision) {
+        Ok(())
+    } else {
+        Err(Error::Invalid("Die Anfrage wartet nicht mehr auf eine Bestätigung".into()))
+    }
 }
 
 // ---------- Google Drive ----------
@@ -684,6 +733,7 @@ pub fn run() {
             list_entries,
             get_entry,
             reveal_password,
+            reveal_api_token,
             password_strength,
             save_entry,
             delete_entry,
@@ -698,6 +748,8 @@ pub fn run() {
             get_settings,
             set_settings,
             agent_info,
+            agent_pending,
+            agent_decide,
             sync_status,
             sync_configure,
             sync_connect,
@@ -722,7 +774,7 @@ mod tests {
     use super::*;
 
     fn policy(enabled: bool, hosts: &[&str]) -> AgentPolicy {
-        AgentPolicy { enabled, hosts: hosts.iter().map(|h| h.to_string()).collect() }
+        AgentPolicy { enabled, hosts: hosts.iter().map(|h| h.to_string()).collect(), ..Default::default() }
     }
 
     #[test]
@@ -741,5 +793,24 @@ mod tests {
         // Ausgeschaltet, aber Hosts bleiben für späteres Einschalten erhalten.
         let p = agent_policy(&policy(false, &["x.de"]), "").unwrap().unwrap();
         assert!(!p.enabled);
+    }
+
+    #[test]
+    fn agent_policy_auth_and_session() {
+        let mut input = policy(true, &["x.de"]);
+        input.auth = vec![
+            vault::AuthLocation::Bearer,
+            vault::AuthLocation::Header { name: " X-Key ".into() },
+            vault::AuthLocation::Bearer,
+        ];
+        input.session_minutes = 15;
+        let p = agent_policy(&input, "").unwrap().unwrap();
+        assert_eq!(p.auth, [vault::AuthLocation::Bearer, vault::AuthLocation::Header { name: "X-Key".into() }]);
+        assert_eq!(p.session_minutes, 15);
+        input.session_minutes = 61;
+        assert!(agent_policy(&input, "").is_err());
+        input.session_minutes = 0;
+        input.auth = vec![vault::AuthLocation::Header { name: "Cookie".into() }];
+        assert!(agent_policy(&input, "").is_err());
     }
 }

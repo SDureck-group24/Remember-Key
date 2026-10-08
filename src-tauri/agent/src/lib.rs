@@ -6,6 +6,7 @@
 //!
 //! Die Antworten enthalten nie Geheimnisse (Passwörter, Notizen, TOTP-Schlüssel oder -Codes).
 
+use std::collections::BTreeMap;
 use std::io::{self, Read, Write};
 
 use serde::de::DeserializeOwned;
@@ -24,6 +25,28 @@ pub enum Request {
         #[serde(default)]
         query: Option<String>,
     },
+    HttpRequest(HttpRequest),
+}
+
+/// HTTPS-Anfrage, in die die App die Zugangsdaten eines Eintrags selbst einsetzt.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HttpRequest {
+    pub entry_id: String,
+    #[serde(default = "default_method")]
+    pub method: String,
+    pub url: String,
+    #[serde(default)]
+    pub headers: BTreeMap<String, String>,
+    #[serde(default)]
+    pub body: Option<String>,
+    /// Einsetz-Stelle (`bearer`, `basic`, `header:<Name>`); optional, wenn nur eine erlaubt ist.
+    #[serde(default)]
+    pub auth: Option<String>,
+}
+
+fn default_method() -> String {
+    "GET".into()
 }
 
 /// Erfolg mit Ergebnis-JSON oder eine Fehlermeldung, die an die KI weitergegeben wird.
@@ -38,6 +61,10 @@ pub struct AgentEntry {
     pub username: String,
     /// Hosts, an die die Zugangsdaten gebunden sind.
     pub hosts: Vec<String>,
+    /// Erlaubte Einsetz-Stellen für `http_request` (`bearer`, `basic`, `header:<Name>`).
+    pub auth: Vec<String>,
+    /// Was eingesetzt wird: `apiToken` (hat Vorrang) oder `password`; `None` = nichts hinterlegt.
+    pub secret: Option<String>,
     pub has_totp: bool,
 }
 
@@ -344,6 +371,15 @@ mod tests {
         let mut buf = ((MAX_MESSAGE + 1) as u32).to_le_bytes().to_vec();
         buf.extend_from_slice(b"{}");
         assert!(read_message::<Response>(&mut buf.as_slice()).is_err());
+    }
+
+    #[test]
+    fn http_request_defaults() {
+        let req: Request =
+            serde_json::from_str(r#"{"op":"http_request","entryId":"1","url":"https://x.de"}"#).unwrap();
+        let Request::HttpRequest(r) = req else { panic!() };
+        assert_eq!(r.method, "GET");
+        assert!(r.headers.is_empty() && r.body.is_none() && r.auth.is_none());
     }
 
     #[test]

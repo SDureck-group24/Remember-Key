@@ -49,7 +49,13 @@ Nach Änderungen am Designsystem `styles.css` neu kopieren.
   ihrem eigenen Verzeichnis. Jede Anfrage steht im Protokoll `%APPDATA%\com.rememberkey.app\agent-log.jsonl`.
 - `npm run build:bridge` baut die Brücke nach `src-tauri/binaries/` (läuft automatisch vor `tauri dev`/`build`).
 - Einrichten: `claude mcp add remember-key -- "<App-Verzeichnis>\remember-key-mcp.exe"`.
-- Phase 1: nur `list_entries` (Metadaten). Das Einsetzen von Zugangsdaten folgt in Phase 2.
+- Tools: `list_entries` (nur Metadaten) und `http_request`. Bei `http_request` setzt die App das Geheimnis selbst
+  ein: den API-Token des Eintrags, falls hinterlegt, sonst das Passwort, und zwar als Bearer-Token, Basic-Auth oder
+  eigenen Header. Erlaubt ist das nur per `https` (`http` nur für localhost), nur an die Hosts des Eintrags und erst
+  nach Bestätigung im Fenster (60 s, optional als Sitzungsfreigabe bis zum Sperren). Das Geheimnis
+  wird samt gängigen Kodierungen aus der Antwort entfernt, und Redirects werden nicht verfolgt.
+- Claude Code: Regel `mcp__remember-key` in `~/.claude/settings.json` unter `permissions.allow`, sonst kann der
+  Auto-Modus Aufrufe blockieren, bevor sie Remember Key erreichen.
 
 ## Google-Drive-Sync
 

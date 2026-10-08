@@ -59,12 +59,20 @@ Neues optionales Feld am `Entry`, abwärtskompatibel per `#[serde(default)]` und
 ```rust
 pub struct AgentPolicy {
     pub enabled: bool,
-    pub hosts: Vec<String>,          // exakt oder "*.example.com"; Standard: Host aus `url`
-    pub actions: Vec<AgentAction>,   // HttpAuth, FillLogin, (später) Command
-    pub http_locations: Vec<HttpLocation>, // AuthorizationBearer, BasicAuth, Header(name), FormField(name)
-    pub approval: Approval,          // Always | Session { minutes: u32 }
+    pub hosts: Vec<String>,         // exakt oder "*.example.com" (nur Subdomains); Standard: Host aus `url`
+    pub auth: Vec<AuthLocation>,    // Bearer | Basic | Header { name }; leer = nur Auflisten
+    pub session_minutes: u32,       // 0 = jede Anfrage bestätigen, sonst bis 60 Minuten
 }
 ```
+
+Zusätzlich hat jeder Eintrag ein optionales Feld `api_token`. Ist es gefüllt, setzt `http_request` den
+Token statt des Passworts ein, denn die meisten APIs akzeptieren kein Login-Passwort (siehe weclapp in
+`docs/beobachtungen-ki-test-2026-10-08.md`). Beide Geheimnisse werden aus Antworten entfernt.
+`list_entries` meldet unter `secret`, was eingesetzt würde.
+
+Umgesetzt ist das schlanker als ursprünglich geplant: Statt einer eigenen `actions`-Liste regelt `auth`,
+ob und wo das Passwort eingesetzt werden darf. `FormField` und TOTP-Einsetzen fehlen noch (siehe
+Phase 4).
 
 `Settings` erhält `agent_enabled: bool` (Standard `false`). Das Protokoll liegt in einer eigenen Datei
 `agent-log.jsonl` im App-Verzeichnis. Es enthält nur Metadaten: Zeit, Tool, Eintrags-ID und Titel,
@@ -74,26 +82,37 @@ Host, Entscheidung und Client. Die Datei wird auf 1000 Zeilen begrenzt.
 
 | Tool | Eingabe | Rückgabe an KI | Geheimnis wird … |
 |---|---|---|---|
-| `list_entries` | `query?` | `id`, `title`, `username`, `host`, `actions`, `has_totp` (nur freigegebene Einträge) | nicht berührt |
-| `http_request` | `method`, `url`, `headers`, `body?`, `auth: {entry_id, location}` | Status, Header und Body, bereinigt | vom Backend in den Request gesetzt (ureq) |
+| `list_entries` | `query?` | `id`, `title`, `username`, `hosts`, `auth`, `hasTotp` (nur freigegebene Einträge) | nicht berührt |
+| `http_request` | `entry_id`, `url`, `method?`, `headers?`, `body?`, `auth?` | Status, Header und Body, bereinigt | vom Backend in den Request gesetzt (ureq) |
 | `fill_login` (Phase 3) | `entry_id` | `ok` / Fehler | vom Backend ins Zielfenster getippt |
 
 Regeln für `http_request`:
 
-- **Host-Prüfung** nach Normalisierung: Punycode, Kleinschreibung, Port, nur `https`.
-- Redirects folgt das Backend nicht automatisch. Jeder `Location`-Sprung wird erneut geprüft, und bei
-  einem Hostwechsel entfällt die Authentifizierung.
+- **Host-Prüfung** nach Normalisierung: Punycode, Kleinschreibung, Port, nur `https`. `http` ist nur für
+  `localhost`, `127.0.0.1` und `[::1]` erlaubt, weil dieser Verkehr den Rechner nicht verlässt. Der Host
+  muss trotzdem freigegeben sein.
+- Die Antwort enthält unter `injected` eine Diagnose ohne Geheimnis (Einsetz-Stelle, Header-Name, bei
+  Basic-Auth ob ein Benutzername dabei war). So lässt sich ein 401 durch falschen Token von einem Fehler
+  beim Einsetzen unterscheiden.
+- Redirects verfolgt das Backend gar nicht. Die KI bekommt Status und `Location` und muss die nächste
+  Adresse selbst anfragen. Diese Anfrage wird wie jede andere geprüft und bestätigt.
+- Die KI darf keine `Authorization`-, `Cookie`-, `Host`- oder Verbindungs-Header setzen und auch nicht
+  den Header der gewählten Einsetz-Stelle. Erlaubt sind die Methoden GET, HEAD, POST, PUT, PATCH und
+  DELETE, und GET/HEAD ohne Body.
 - Das Geheimnis kommt **nur** an die in `http_locations` erlaubten Stellen. Platzhalter im Body oder in
   der URL gibt es nicht. So kann die KI das Passwort nicht z. B. als Gist-Inhalt an den erlaubten Host
   schicken.
-- **Bereinigung der Antwort:** Klartext sowie Base64-, URL- und Hex-Varianten des Geheimnisses werden
-  durch `***` ersetzt.
+- **Bereinigung der Antwort:** Das Geheimnis wird durch `***` ersetzt, und zwar für das Passwort und
+  `Benutzer:Passwort` jeweils als Klartext, Base64 (Standard und URL-sicher, mit und ohne Padding), Hex,
+  Prozent- und Formularkodierung, JSON- und HTML-Escaping. Das gilt auch für Fehlermeldungen.
 - Header wie `Authorization` und `Set-Cookie` werden aus der Antwort entfernt.
-- Größenlimit für Antworten: 1 MiB.
-- Geheimnisse liegen nur in `Zeroizing`-Puffern und werden nach dem Request genullt.
+- Größenlimit für den Antwort-Body: 512 KiB (danach `truncated: true`). Binärdaten werden nur als Größe
+  gemeldet.
+- Geheimnisse liegen nur in `Zeroizing`-Puffern und werden nach dem Request genullt. Ausnahme: Kopien,
+  die `ureq` intern für den Header anlegt, lassen sich nicht nullen.
 
-TOTP: Eine Location `TotpHeader(name)` oder `FormField` mit Quelle `totp` reicht. Der Code wird wie ein
-Passwort behandelt und taucht nie in der Antwort auf.
+TOTP (noch offen): Eine Location `TotpHeader(name)` oder `FormField` mit Quelle `totp` reicht. Der Code
+wird wie ein Passwort behandelt und taucht nie in der Antwort auf.
 
 ## 5. Bestätigungsablauf
 
@@ -130,16 +149,19 @@ claude mcp add remember-key -- "%LOCALAPPDATA%\Remember Key\remember-key-mcp.exe
 ## 7. Phasen
 
 1. **Grundgerüst** – umgesetzt
-   - Workspace-Crate `mcp-bridge` mit `rmcp`.
+   - Workspace-Crate `src-tauri/agent` mit eigenem MCP-Protokoll.
    - Pipe-Server in `agent.rs` mit ACL und Client-Prüfung.
    - Globaler Schalter, `AgentPolicy` im Datenmodell inkl. Sync-Merge, Protokoll.
    - `list_entries`.
-2. **`http_request`**
-   - Host- und Location-Policy, Redirect-Behandlung, Bereinigung.
-   - Bestätigungsdialog, UI im Eintrag.
-3. **`fill_login`** (Entscheidung offen, siehe unten).
+2. **`http_request`** – umgesetzt
+   - Host- und Location-Policy, keine Redirects, Bereinigung.
+   - Bestätigungsdialog mit Countdown und Sitzungsfreigaben, UI im Eintrag.
+   - Nach der Bestätigung wird die Freigabe erneut geprüft, bevor das Passwort gelesen wird.
+3. **`fill_login`** per WebExtension (Manifest V3) für Zen/Firefox und Chrome mit Native Messaging zur App.
+   Hintergrund: siehe `docs/beobachtungen-ki-test-2026-10-08.md`, Abschnitt 2.4.
 4. **Härtung**
-   - Windows Hello, Session-Freigaben.
+   - Windows Hello.
+   - `FormField` als Einsetz-Stelle, TOTP-Einsetzen.
    - Optional: Befehlsvorlagen (`run_with_secret`, nur vom Nutzer angelegte Vorlagen).
    - Optional: Remember Key als Git-Credential-Helper.
 
@@ -148,8 +170,8 @@ claude mcp add remember-key -- "%LOCALAPPDATA%\Remember Key\remember-key-mcp.exe
 - **Rust-Unit-Tests:**
   - Host-Matching (Wildcard, Punycode, Port, `http` abgelehnt)
   - Location-Durchsetzung
-  - Bereinigung (alle Kodierungen, Geheimnis über Chunk-Grenzen)
-  - Redirect-Hostwechsel
+  - Bereinigung (alle Kodierungen); zusätzlich `cargo test -- --ignored echo_service` gegen httpbin.org
+    mit Dummy-Passwort für alle drei Einsetz-Stellen
   - Serde-Kompatibilität alter Tresore
   - Sync-Merge von `AgentPolicy`
 - **Integrationstest:** Pipe-Client gegen `agent.rs` mit Test-Tresor und lokalem HTTPS-Mock.
@@ -177,6 +199,9 @@ claude mcp add remember-key -- "%LOCALAPPDATA%\Remember Key\remember-key-mcp.exe
      Aufwand, aber fragil, und ein KI-gesteuerter Browser kann das Feld danach auslesen.
    - **Browser-Erweiterung mit Native Messaging:** Robuste Origin-Bindung, aber deutlich mehr Aufwand.
    - Empfehlung: zuerst Phase 2 liefern und erst dann entscheiden.
+   - **Entschieden (08.10.2026):** WebExtension für Zen (Firefox) und Chrome. Grenze bleibt: Steuert die
+     KI den Browser und kann Seiten-JavaScript ausführen, kann sie ein ausgefülltes Feld lesen. Die
+     Erweiterung soll deshalb ausfüllen und sofort absenden.
 2. **Bridge als Workspace-Crate oder `[[bin]]` im bestehenden Paket.** Empfehlung: eigene Crate, weil
    kleiner und ohne Tresorcode.
 3. **Session-Freigaben:** ganz zulassen oder nur „Einmal erlauben“.

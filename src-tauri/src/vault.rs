@@ -90,6 +90,10 @@ pub struct Entry {
     pub title: String,
     pub username: String,
     pub password: String,
+    /// API-Token für Programmzugriffe (z. B. KI-Zugriff). Ist er gesetzt, wird er bei
+    /// `http_request` statt des Passworts eingesetzt.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub api_token: String,
     pub url: String,
     pub notes: String,
     #[serde(default)]
@@ -105,13 +109,88 @@ pub struct Entry {
 }
 
 /// Regeln, nach denen ein KI-Assistent einen Eintrag nutzen darf, ohne ihn zu sehen.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, Zeroize, ZeroizeOnDrop)]
+/// Enthält keine Geheimnisse; `Zeroize` nur, weil `Entry` beim Drop alle Felder nullt.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, Zeroize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentPolicy {
     pub enabled: bool,
     /// Normalisierte Hosts (`example.com`, `*.example.com`), an die die Zugangsdaten gebunden sind.
     #[serde(default)]
     pub hosts: Vec<String>,
+    /// Stellen, an denen das Passwort in HTTP-Anfragen eingesetzt werden darf. Leer = gar nicht.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[zeroize(skip)]
+    pub auth: Vec<AuthLocation>,
+    /// 0 = jede Nutzung einzeln bestätigen; sonst darf eine Freigabe so viele Minuten gelten.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub session_minutes: u32,
+}
+
+fn is_zero(n: &u32) -> bool {
+    *n == 0
+}
+
+/// Höchstdauer einer Sitzungsfreigabe in Minuten.
+pub const MAX_SESSION_MINUTES: u32 = 60;
+
+impl AgentPolicy {
+    /// Ist `host` (aus einer geparsten URL, also bereits normalisiert) erlaubt?
+    /// `*.example.com` deckt nur Subdomains ab, nicht `example.com` selbst.
+    pub fn allows_host(&self, host: &str) -> bool {
+        let host = host.trim_end_matches('.').to_ascii_lowercase();
+        self.hosts.iter().any(|h| match h.strip_prefix("*.") {
+            Some(base) => host.strip_suffix(base).is_some_and(|sub| sub.len() > 1 && sub.ends_with('.')),
+            None => *h == host,
+        })
+    }
+}
+
+/// Wo das Passwort in eine HTTP-Anfrage eingesetzt wird.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum AuthLocation {
+    /// `Authorization: Bearer <Passwort>`
+    Bearer,
+    /// `Authorization: Basic base64(<Benutzername>:<Passwort>)`
+    Basic,
+    /// `<name>: <Passwort>`
+    Header { name: String },
+}
+
+/// Header, die weder als Einsetz-Stelle noch von der KI gesetzt werden dürfen.
+pub const FORBIDDEN_HEADERS: [&str; 7] =
+    ["host", "cookie", "content-length", "transfer-encoding", "connection", "proxy-authorization", "te"];
+
+impl AuthLocation {
+    /// Kurzform für KI und Protokoll: `bearer`, `basic`, `header:X-Api-Key`.
+    pub fn key(&self) -> String {
+        match self {
+            Self::Bearer => "bearer".into(),
+            Self::Basic => "basic".into(),
+            Self::Header { name } => format!("header:{name}"),
+        }
+    }
+
+    /// Name des Headers, in dem das Geheimnis landet.
+    pub fn header_name(&self) -> &str {
+        match self {
+            Self::Bearer | Self::Basic => "Authorization",
+            Self::Header { name } => name,
+        }
+    }
+
+    /// Prüft und normalisiert (Header-Name getrimmt, nur Token-Zeichen).
+    pub fn validated(&self) -> Result<Self> {
+        let Self::Header { name } = self else { return Ok(self.clone()) };
+        let name = name.trim();
+        let token = !name.is_empty()
+            && name.len() <= 64
+            && name.bytes().all(|b| b.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&b));
+        if !token || FORBIDDEN_HEADERS.contains(&name.to_ascii_lowercase().as_str()) {
+            return Err(Error::Invalid(format!("Ungültiger Header-Name: {name}")));
+        }
+        Ok(Self::Header { name: name.to_string() })
+    }
 }
 
 /// Normalisiert eine Host-Angabe: URL oder Host, optional mit `*.`-Präfix für Subdomains.
@@ -707,6 +786,7 @@ mod tests {
             title: "Mail".into(),
             username: "me@example.com".into(),
             password: "s3cr3t!".into(),
+            api_token: String::new(),
             url: "https://mail.example.com".into(),
             notes: String::new(),
             totp: None,
@@ -865,6 +945,37 @@ mod tests {
     }
 
     #[test]
+    fn allows_host_exact_and_wildcard() {
+        let p = AgentPolicy { enabled: true, hosts: vec!["github.com".into(), "*.azure.com".into()], ..Default::default() };
+        assert!(p.allows_host("github.com"));
+        assert!(p.allows_host("GitHub.com."));
+        assert!(!p.allows_host("api.github.com"));
+        assert!(!p.allows_host("evilgithub.com"));
+        assert!(p.allows_host("management.azure.com"));
+        assert!(p.allows_host("a.b.azure.com"));
+        assert!(!p.allows_host("azure.com"));
+        assert!(!p.allows_host("evilazure.com"));
+        assert!(!p.allows_host(".azure.com"));
+    }
+
+    #[test]
+    fn auth_location_validation_and_serde() {
+        assert!(AuthLocation::Header { name: "X-Api-Key".into() }.validated().is_ok());
+        assert_eq!(
+            AuthLocation::Header { name: " X-Key ".into() }.validated().unwrap(),
+            AuthLocation::Header { name: "X-Key".into() }
+        );
+        for bad in ["", "X Key", "Cookie", "host", "X:Key", "Ä"] {
+            assert!(AuthLocation::Header { name: bad.into() }.validated().is_err(), "{bad}");
+        }
+        let json = serde_json::to_string(&vec![AuthLocation::Bearer, AuthLocation::Header { name: "X".into() }]).unwrap();
+        assert_eq!(json, r#"[{"kind":"bearer"},{"kind":"header","name":"X"}]"#);
+        // Phase-1-Freigaben ohne neue Felder laden weiter.
+        let p: AgentPolicy = serde_json::from_str(r#"{"enabled":true,"hosts":["x.de"]}"#).unwrap();
+        assert!(p.auth.is_empty() && p.session_minutes == 0);
+    }
+
+    #[test]
     fn agent_policy_is_optional_and_merges_with_entry() {
         // Einträge ohne Freigabe serialisieren unverändert (wichtig für den Gleichstand beim Merge).
         assert!(!serde_json::to_string(&sample_entry()).unwrap().contains("agent"));
@@ -872,7 +983,7 @@ mod tests {
         a.entries.push(entry("1", "Mail", 1));
         let mut b = VaultData::default();
         let mut e = entry("1", "Mail", 2);
-        e.agent = Some(AgentPolicy { enabled: true, hosts: vec!["mail.example.com".into()] });
+        e.agent = Some(AgentPolicy { enabled: true, hosts: vec!["mail.example.com".into()], ..Default::default() });
         b.entries.push(e);
         a.merge(&b);
         assert_eq!(a.entries[0].agent.as_ref().unwrap().hosts, ["mail.example.com"]);

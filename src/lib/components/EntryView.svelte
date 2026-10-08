@@ -19,6 +19,7 @@
   let detail = $state<EntryDetail | null>(null);
   /** Nur gesetzt, solange das Passwort sichtbar ist; nach 20 s automatisch verborgen. */
   let revealed = $state<string | null>(null);
+  let tokenRevealed = $state<string | null>(null);
   let hideTimer: ReturnType<typeof setTimeout> | undefined;
   const REVEAL_SECONDS = 20;
   let confirmDelete = $state(false);
@@ -39,6 +40,7 @@
 
   function hide() {
     revealed = null;
+    tokenRevealed = null;
     clearTimeout(hideTimer);
   }
 
@@ -49,6 +51,20 @@
     }
     try {
       revealed = await api.revealPassword(id);
+      hideTimer = setTimeout(hide, REVEAL_SECONDS * 1000);
+    } catch (e) {
+      error = errorText(e);
+    }
+  }
+
+  async function toggleRevealToken() {
+    if (tokenRevealed !== null) {
+      hide();
+      return;
+    }
+    try {
+      tokenRevealed = await api.revealApiToken(id);
+      clearTimeout(hideTimer);
       hideTimer = setTimeout(hide, REVEAL_SECONDS * 1000);
     } catch (e) {
       error = errorText(e);
@@ -129,6 +145,24 @@
         </dd>
       {/if}
 
+      {#if detail.hasApiToken}
+        <dt>API-Token</dt>
+        <dd>
+          <span class="value mono grow" class:masked={tokenRevealed === null}>{tokenRevealed ?? "••••••••••••••"}</span>
+          <button
+            class="btn btn-icon btn-sm"
+            title={tokenRevealed !== null ? "Verbergen" : `Anzeigen (${REVEAL_SECONDS} s)`}
+            aria-label={tokenRevealed !== null ? "API-Token verbergen" : "API-Token anzeigen"}
+            onclick={toggleRevealToken}
+          >
+            <Icon name={tokenRevealed !== null ? "eye-slash" : "eye"} size={16} />
+          </button>
+          <button class="btn btn-icon btn-sm" title="API-Token kopieren" aria-label="API-Token kopieren" onclick={() => oncopy("apiToken", "API-Token")}>
+            <Icon name="copy" size={16} />
+          </button>
+        </dd>
+      {/if}
+
       {#if detail.totp}
         <dt>Einmalcode</dt>
         <dd><Totp {id} oncopy={() => oncopy("totp", "Einmalcode")} /></dd>
@@ -141,7 +175,18 @@
 
       {#if detail.agent.enabled}
         <dt>KI-Zugriff</dt>
-        <dd><span class="value grow"><Icon name="robot" size={14} /> Freigegeben für {detail.agent.hosts.join(", ")}</span></dd>
+        <dd>
+          <span class="value grow">
+            <Icon name="robot" size={14} /> Freigegeben für {detail.agent.hosts.join(", ")}
+            {#if detail.agent.auth.length}
+              · Einsetzen als {detail.agent.auth
+                .map((a) => (a.kind === "bearer" ? "Bearer-Token" : a.kind === "basic" ? "Basic-Auth" : `Header ${a.name}`))
+                .join(", ")}
+            {:else}
+              · nur Auflisten
+            {/if}
+          </span>
+        </dd>
       {/if}
 
       {#if detail.notes}

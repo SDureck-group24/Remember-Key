@@ -6,6 +6,7 @@
   import Setup from "$lib/components/Setup.svelte";
   import Unlock from "$lib/components/Unlock.svelte";
   import Vault from "$lib/components/Vault.svelte";
+  import AgentApproval from "$lib/components/AgentApproval.svelte";
 
   let view = $state<"loading" | "setup" | "unlock" | "vault">("loading");
   let lockReason = $state("");
@@ -55,4 +56,5 @@
   />
 {:else if view === "vault"}
   <Vault onlock={lockNow} />
+  <AgentApproval />
 {/if}

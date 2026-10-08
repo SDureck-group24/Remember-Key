@@ -5,14 +5,19 @@
 
 use std::io::{self, BufRead, Write};
 
-use rk_agent::Request;
+use std::collections::BTreeMap;
+use std::time::Duration;
+
+use rk_agent::{HttpRequest, Request};
 use serde_json::{json, Value};
 
 const PROTOCOL_VERSIONS: [&str; 3] = ["2025-06-18", "2025-03-26", "2024-11-05"];
 
 const INSTRUCTIONS: &str = "Remember Key ist ein lokaler Passwort-Manager. Über diesen Server siehst du nur \
 Einträge, die der Nutzer für KI-Assistenten freigegeben hat, und nur deren Metadaten. Passwörter, Notizen und \
-2FA-Schlüssel werden nie herausgegeben – bitte den Nutzer nicht danach fragen.";
+2FA-Schlüssel werden nie herausgegeben – bitte den Nutzer nicht danach fragen. Mit http_request kannst du \
+authentifizierte HTTPS-Anfragen stellen: Remember Key setzt die Zugangsdaten selbst ein, nachdem der Nutzer \
+zugestimmt hat.";
 
 fn main() {
     let stdin = io::stdin();
@@ -84,6 +89,46 @@ fn tools() -> Value {
                 "additionalProperties": false
             },
             "annotations": { "readOnlyHint": true, "openWorldHint": false }
+        },
+        {
+            "name": "http_request",
+            "title": "Authentifizierte HTTPS-Anfrage",
+            "description": "Führt eine HTTPS-Anfrage aus, in die Remember Key die Zugangsdaten eines freigegebenen \
+                Eintrags selbst einsetzt (z. B. als Bearer-Token oder Basic-Auth). Du siehst das Passwort nie; es \
+                wird auch aus der Antwort entfernt. Nur an die Hosts des Eintrags (siehe list_entries). Der Nutzer \
+                muss die Anfrage in Remember Key bestätigen – das kann bis zu 60 Sekunden dauern. Weiterleitungen \
+                werden nicht verfolgt. Setze selbst keine Authorization- oder Cookie-Header. Die Antwort nennt unter \
+                `injected`, wo die Zugangsdaten eingesetzt wurden. Bei wiederholtem 401/403 nicht einfach erneut \
+                versuchen (jeder Versuch kostet eine Bestätigung), sondern den Nutzer bitten, Token und Freigabe zu prüfen.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "entry_id": { "type": "string", "description": "ID des Eintrags aus list_entries." },
+                    "url": {
+                        "type": "string",
+                        "description": "Vollständige https-URL (http nur für localhost/127.0.0.1); der Host muss zum Eintrag passen."
+                    },
+                    "method": {
+                        "type": "string",
+                        "enum": ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"],
+                        "default": "GET"
+                    },
+                    "headers": {
+                        "type": "object",
+                        "additionalProperties": { "type": "string" },
+                        "description": "Zusätzliche Header, z. B. Accept oder Content-Type."
+                    },
+                    "body": { "type": "string", "description": "Request-Body (nicht bei GET/HEAD)." },
+                    "auth": {
+                        "type": "string",
+                        "description": "Einsetz-Stelle aus list_entries (bearer, basic, header:<Name>). Nur nötig, \
+                            wenn mehrere erlaubt sind."
+                    }
+                },
+                "required": ["entry_id", "url"],
+                "additionalProperties": false
+            },
+            "annotations": { "readOnlyHint": false, "destructiveHint": true, "openWorldHint": true }
         }
     ])
 }
@@ -95,9 +140,42 @@ fn call_tool(params: &Value) -> Value {
         "list_entries" => Request::ListEntries {
             query: args.get("query").and_then(Value::as_str).map(str::to_string).filter(|q| !q.trim().is_empty()),
         },
+        "http_request" => match http_request(&args) {
+            Ok(r) => Request::HttpRequest(r),
+            Err(e) => return tool_result(Err(e)),
+        },
         _ => return tool_result(Err(format!("Unbekanntes Tool: {name}"))),
     };
-    tool_result(send(&request))
+    tool_result(send(request))
+}
+
+/// Höchstwartezeit auf die App. Bei `http_request` umfasst sie den Bestätigungsdialog
+/// (60 s) sowie Verbindungsaufbau (10 s) und Anfrage (30 s) in der App, plus Reserve.
+fn timeout_for(request: &Request) -> Duration {
+    match request {
+        Request::ListEntries { .. } => Duration::from_secs(15),
+        Request::HttpRequest(_) => Duration::from_secs(120),
+    }
+}
+
+fn http_request(args: &Value) -> Result<HttpRequest, String> {
+    let text = |key: &str| args.get(key).and_then(Value::as_str).map(str::to_string);
+    let mut headers = BTreeMap::new();
+    if let Some(h) = args.get("headers").filter(|h| !h.is_null()) {
+        let obj = h.as_object().ok_or("headers muss ein Objekt sein")?;
+        for (k, v) in obj {
+            let v = v.as_str().ok_or_else(|| format!("Header {k}: Wert muss ein Text sein"))?;
+            headers.insert(k.clone(), v.to_string());
+        }
+    }
+    Ok(HttpRequest {
+        entry_id: text("entry_id").ok_or("entry_id fehlt")?,
+        method: text("method").unwrap_or_else(|| "GET".into()),
+        url: text("url").ok_or("url fehlt")?,
+        headers,
+        body: text("body"),
+        auth: text("auth"),
+    })
 }
 
 fn tool_result(result: rk_agent::Response) -> Value {
@@ -110,8 +188,37 @@ fn tool_result(result: rk_agent::Response) -> Value {
     }
 }
 
+/// Schickt die Anfrage an die App. Hängt die App (oder beendet sie sich gerade bei noch
+/// offener Pipe), bricht die Brücke nach `timeout_for` ab, statt den Tool-Aufruf ewig zu
+/// blockieren.
 #[cfg(windows)]
-fn send(request: &Request) -> rk_agent::Response {
+fn send(request: Request) -> rk_agent::Response {
+    use std::os::windows::io::AsRawHandle;
+    use std::sync::mpsc;
+    use std::thread;
+
+    let timeout = timeout_for(&request);
+    let (tx, rx) = mpsc::channel();
+    let worker = thread::spawn(move || {
+        let _ = tx.send(exchange(&request));
+    });
+    match rx.recv_timeout(timeout) {
+        Ok(resp) => resp,
+        Err(_) => {
+            // Blockierendes ReadFile/WriteFile des Workers abbrechen; dadurch schließt sich
+            // die Verbindung und auch die App bekommt einen Fehler statt weiter zu warten.
+            unsafe { windows_sys::Win32::System::IO::CancelSynchronousIo(worker.as_raw_handle()) };
+            Err(format!(
+                "Remember Key hat nicht innerhalb von {} s geantwortet. Bitte den Nutzer prüfen lassen, ob die App \
+                 läuft und nicht hängt.",
+                timeout.as_secs()
+            ))
+        }
+    }
+}
+
+#[cfg(windows)]
+fn exchange(request: &Request) -> rk_agent::Response {
     use rk_agent::pipe::Pipe;
 
     let mut pipe = Pipe::connect().map_err(|_| "Remember Key läuft nicht. Bitte die App starten.".to_string())?;
@@ -128,7 +235,7 @@ fn send(request: &Request) -> rk_agent::Response {
 }
 
 #[cfg(not(windows))]
-fn send(_request: &Request) -> rk_agent::Response {
+fn send(_request: Request) -> rk_agent::Response {
     Err("Remember Key ist nur unter Windows verfügbar.".into())
 }
 
@@ -164,9 +271,27 @@ mod tests {
     }
 
     #[test]
-    fn tools_list_has_only_metadata_tool() {
+    fn tools_list_names() {
         let r = handle(&json!({ "jsonrpc": "2.0", "id": 5, "method": "tools/list" })).unwrap();
         let names: Vec<&str> = r["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
-        assert_eq!(names, ["list_entries"]);
+        assert_eq!(names, ["list_entries", "http_request"]);
+    }
+
+    #[test]
+    fn http_request_arguments() {
+        let r = http_request(&json!({ "entry_id": "1", "url": "https://x.de", "headers": { "Accept": "a" } })).unwrap();
+        assert_eq!(r.method, "GET");
+        assert_eq!(r.headers["Accept"], "a");
+        assert!(http_request(&json!({ "url": "https://x.de" })).is_err());
+        assert!(http_request(&json!({ "entry_id": "1", "url": "u", "headers": { "A": 1 } })).is_err());
+        assert!(http_request(&json!({ "entry_id": "1", "url": "u", "headers": "A: b" })).is_err());
+    }
+
+    #[test]
+    fn timeouts_cover_approval_and_request() {
+        assert!(timeout_for(&Request::ListEntries { query: None }) <= Duration::from_secs(15));
+        let req = http_request(&json!({ "entry_id": "1", "url": "https://x.de" })).unwrap();
+        // Dialog (60 s) + Verbindungsaufbau (10 s) + Anfrage (30 s) in der App
+        assert!(timeout_for(&Request::HttpRequest(req)) > Duration::from_secs(100));
     }
 }

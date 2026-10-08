@@ -11,6 +11,8 @@
   let info = $state<AgentInfo | null>(null);
   let error = $state("");
 
+  const PERMISSION = "mcp__remember-key";
+
   let command = $derived(info?.bridgePath ? `claude mcp add remember-key -- "${info.bridgePath}"` : "");
 
   const OUTCOMES: Record<AgentOutcome, { label: string; cls: string }> = {
@@ -18,6 +20,8 @@
     locked: { label: "Gesperrt", cls: "tag-neutral" },
     disabled: { label: "Ausgeschaltet", cls: "tag-neutral" },
     rejected: { label: "Abgewiesen", cls: "tag-outline" },
+    denied: { label: "Abgelehnt", cls: "tag-outline" },
+    failed: { label: "Fehler", cls: "tag-outline" },
   };
 
   async function refresh() {
@@ -36,10 +40,10 @@
     };
   });
 
-  async function copyCommand() {
+  async function copy(text: string, message: string) {
     try {
-      await api.copyText(command);
-      store.notify("Befehl kopiert");
+      await api.copyText(text);
+      store.notify(message);
     } catch (e) {
       error = errorText(e);
     }
@@ -51,7 +55,8 @@
 
 <p class="hint">
   KI-Assistenten wie Claude sehen über die MCP-Brücke nur freigegebene Einträge und nur deren Titel, Benutzernamen
-  und Hosts – nie Passwörter, Notizen oder 2FA-Schlüssel. Freigeben lässt sich ein Eintrag beim Bearbeiten.
+  und Hosts – nie Passwörter, Notizen oder 2FA-Schlüssel. Ist es beim Eintrag erlaubt, setzt Remember Key das Passwort
+  nach deiner Bestätigung selbst in HTTPS-Anfragen ein. Freigeben lässt sich ein Eintrag beim Bearbeiten.
 </p>
 
 {#if info}
@@ -61,10 +66,24 @@
         <span class="lbl">Einrichten in Claude Code</span>
         <div class="row">
           <code class="cmd grow">{command}</code>
-          <button type="button" class="btn btn-icon btn-sm" title="Befehl kopieren" aria-label="Befehl kopieren" onclick={copyCommand}>
+          <button type="button" class="btn btn-icon btn-sm" title="Befehl kopieren" aria-label="Befehl kopieren" onclick={() => copy(command, "Befehl kopiert")}>
             <Icon name="copy" size={15} />
           </button>
         </div>
+      </div>
+      <div class="field">
+        <span class="lbl">Berechtigung in Claude Code</span>
+        <div class="row">
+          <code class="cmd grow">{PERMISSION}</code>
+          <button type="button" class="btn btn-icon btn-sm" title="Regel kopieren" aria-label="Regel kopieren" onclick={() => copy(PERMISSION, "Regel kopiert")}>
+            <Icon name="copy" size={15} />
+          </button>
+        </div>
+        <p class="hint">
+          In <span class="mono">~/.claude/settings.json</span> unter <span class="mono">permissions.allow</span> eintragen.
+          Sonst kann der Auto-Modus von Claude Code Aufrufe blockieren, bevor sie Remember Key erreichen. Jede Anfrage
+          mit Passwort bestätigst du trotzdem hier.
+        </p>
       </div>
     {:else}
       <p class="error"><Icon name="warning-circle" size={16} /> Die MCP-Brücke (remember-key-mcp.exe) fehlt neben der App.</p>

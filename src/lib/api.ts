@@ -17,12 +17,21 @@ export interface EntrySummary {
   agent: boolean;
 }
 
+/** Stelle, an der das Passwort in eine HTTP-Anfrage eingesetzt wird. */
+export type AuthLocation = { kind: "bearer" } | { kind: "basic" } | { kind: "header"; name: string };
+
 /** Freigabe eines Eintrags für KI-Assistenten (MCP). */
 export interface AgentPolicy {
   enabled: boolean;
   /** Hosts, an die die Zugangsdaten gebunden sind (`example.com`, `*.example.com`). */
   hosts: string[];
+  /** Leer = Passwort wird nie in Anfragen eingesetzt. */
+  auth: AuthLocation[];
+  /** 0 = jede Anfrage einzeln bestätigen. */
+  sessionMinutes: number;
 }
+
+export const MAX_SESSION_MINUTES = 60;
 
 export interface EntryDetail {
   id: string;
@@ -30,6 +39,8 @@ export interface EntryDetail {
   username: string;
   /** Das Passwort selbst kommt nur über `revealPassword`. */
   hasPassword: boolean;
+  /** Der Token selbst kommt nur über `revealApiToken`. */
+  hasApiToken: boolean;
   url: string;
   notes: string;
   totp: string;
@@ -45,6 +56,8 @@ export interface EntryInput {
   username: string;
   /** `null` = beim Bearbeiten unverändert lassen. */
   password: string | null;
+  /** `null` = beim Bearbeiten unverändert lassen. */
+  apiToken: string | null;
   url: string;
   notes: string;
   totp: string;
@@ -79,7 +92,24 @@ export interface Settings {
   agentEnabled: boolean;
 }
 
-export type AgentOutcome = "ok" | "locked" | "disabled" | "rejected";
+export type AgentOutcome = "ok" | "locked" | "disabled" | "rejected" | "denied" | "failed";
+
+/** Anfrage der KI, die auf Bestätigung wartet. */
+export interface PendingApproval {
+  id: number;
+  entryTitle: string;
+  method: string;
+  host: string;
+  path: string;
+  /** `bearer`, `basic` oder `header:<Name>` */
+  auth: string;
+  /** 0 = keine Sitzungsfreigabe möglich. */
+  sessionMinutes: number;
+  /** Unix-Zeit der automatischen Ablehnung. */
+  expiresAt: number;
+}
+
+export type ApprovalDecision = "deny" | "once" | "session";
 
 export interface AgentLogEntry {
   ts: number;
@@ -125,7 +155,7 @@ export interface SyncStatus {
   clientId: string;
 }
 
-export type CopyField = "username" | "password" | "totp";
+export type CopyField = "username" | "password" | "apiToken" | "totp";
 
 export const MIN_MASTER_LEN = 10;
 
@@ -150,6 +180,7 @@ export const api = {
   list: () => invoke<EntrySummary[]>("list_entries"),
   get: (id: string) => invoke<EntryDetail>("get_entry", { id }),
   revealPassword: (id: string) => invoke<string>("reveal_password", { id }),
+  revealApiToken: (id: string) => invoke<string>("reveal_api_token", { id }),
   passwordStrength: (password: string) => invoke<Strength>("password_strength", { password }),
   save: (entry: EntryInput) => invoke<string>("save_entry", { entry }),
   remove: (id: string) => invoke<void>("delete_entry", { id }),
@@ -177,6 +208,8 @@ export const api = {
   setSettings: (settings: Settings) => invoke<void>("set_settings", { settings }),
 
   agentInfo: () => invoke<AgentInfo>("agent_info"),
+  agentPending: () => invoke<PendingApproval[]>("agent_pending"),
+  agentDecide: (id: number, decision: ApprovalDecision) => invoke<void>("agent_decide", { id, decision }),
 };
 
 export function errorText(e: unknown): string {
