@@ -1,6 +1,6 @@
 [package]
 name = "rk-agent"
-version = "0.1.0"
+version = "0.2.0"
 description = "Pipe-Protokoll und MCP-Brücke für den KI-Zugriff auf Remember Key"
 edition = "2021"
 
