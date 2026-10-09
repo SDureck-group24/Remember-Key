@@ -38,6 +38,9 @@ pub struct Pending {
     pub host: String,
     pub path: String,
     pub auth: String,
+    /// Cookie-Sitzung: `""` (keine), `new` (Login legt Sitzung an) oder `use` (Folgeanfrage
+    /// mit den Cookies der Sitzung, ohne Geheimnis).
+    pub session: String,
     /// 0 = keine Sitzungsfreigabe möglich.
     pub session_minutes: u32,
     /// Unix-Zeit, zu der die Anfrage automatisch abgelehnt wird.
@@ -171,6 +174,7 @@ mod tests {
             host: "x.de".into(),
             path: "/".into(),
             auth: "bearer".into(),
+            session: String::new(),
             session_minutes: 0,
             expires_at: 0,
         };

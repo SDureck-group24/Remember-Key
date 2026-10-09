@@ -102,10 +102,23 @@
           <dl>
             <dt>Anfrage</dt>
             <dd class="mono">{current.method} {current.host}{current.path}</dd>
-            <dt>Passwort</dt>
-            <dd>wird {authText(current.auth)} eingesetzt</dd>
+            {#if current.session === "use"}
+              <dt>Anmeldung</dt>
+              <dd>über die bestehende Sitzung (Cookies aus dem Login) – kein Passwort</dd>
+            {:else}
+              <dt>Passwort</dt>
+              <dd>wird {authText(current.auth)} eingesetzt</dd>
+            {/if}
+            {#if current.session === "new"}
+              <dt>Sitzung</dt>
+              <dd>Remember Key behält die Anmelde-Cookies für Folgeanfragen an {current.host}</dd>
+            {/if}
           </dl>
-          <p class="hint">Die KI sieht das Passwort nicht; es wird auch aus der Antwort entfernt.</p>
+          <p class="hint">
+            Die KI sieht das Passwort nicht; es wird auch aus der Antwort entfernt.{current.session
+              ? " Die Sitzungs-Cookies sieht sie ebenfalls nicht. Die Sitzung endet nach 15 Min. ohne Nutzung, spätestens nach 1 Std. und beim Sperren."
+              : ""}
+          </p>
         {/if}
       </div>
 

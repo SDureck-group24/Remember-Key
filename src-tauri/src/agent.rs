@@ -14,6 +14,7 @@ mod approval;
 mod browser;
 mod http;
 mod native;
+mod session;
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -27,7 +28,13 @@ use tauri::{AppHandle, Emitter, Manager};
 use crate::vault::{UnlockedVault, VaultData};
 use crate::{AppState, Inner};
 
-pub use approval::{decide, pending, reset as reset_approvals, Decision, Pending};
+pub use approval::{decide, pending, Decision, Pending};
+
+/// Beim Sperren: wartende Anfragen ablehnen, Sitzungsfreigaben und Cookie-Sitzungen verwerfen.
+pub fn reset_approvals() {
+    approval::reset();
+    session::clear();
+}
 
 const ACTIVITY_EVENT: &str = "agent-activity";
 const LOG_FILE: &str = "agent-log.jsonl";
@@ -178,29 +185,86 @@ fn list_entries(app: &AppHandle, query: Option<&str>) -> (Response, Outcome) {
     }
 }
 
+/// Wie eine `http_request`-Anfrage mit Cookies umgeht.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Mode {
+    /// Einzelne Anfrage, Cookies werden verworfen.
+    Single,
+    /// Login: Geheimnis einsetzen und die Cookies der Antwort als neue Sitzung behalten.
+    New,
+    /// Folgeanfrage: Cookies der Sitzung mitschicken, nichts einsetzen.
+    Use(String),
+}
+
+impl Mode {
+    fn of(req: &HttpRequest) -> Result<Self, String> {
+        let mode = match req.session.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+            None => Self::Single,
+            Some(s) if s.eq_ignore_ascii_case(session::NEW) => Self::New,
+            Some(id) => Self::Use(id.to_string()),
+        };
+        if req.end_session && !matches!(mode, Self::Use(_)) {
+            return Err("end_session geht nur zusammen mit der ID einer bestehenden Sitzung".into());
+        }
+        Ok(mode)
+    }
+
+    /// Für Protokoll und Dialog (ohne vollständige Sitzungs-ID).
+    fn label(&self) -> String {
+        match self {
+            Self::Single => String::new(),
+            Self::New => "Sitzung neu".into(),
+            Self::Use(id) => format!("Sitzung {}…", id.get(..8).unwrap_or(id)),
+        }
+    }
+}
+
+/// Prüft die Anfrage gegen die Freigabe und – bei Folgeanfragen – gegen die Sitzung.
+fn prepare_for(req: &HttpRequest, policy: &crate::vault::AgentPolicy, mode: &Mode) -> Result<http::Prepared, Refusal> {
+    let reject = |m: String| (m, Outcome::Rejected);
+    let Mode::Use(id) = mode else { return http::prepare(req, policy).map_err(reject) };
+    let b = session::binding(id).map_err(reject)?;
+    // Freigabe passt nicht mehr zur Sitzung: Sitzung beenden.
+    if b.entry_id != req.entry_id || !policy.allows_host(&b.host) || !policy.auth.contains(&b.auth) {
+        session::close(id);
+        return Err(reject(session::UNKNOWN.into()));
+    }
+    let p = http::prepare_in_session(req, policy, &b.auth).map_err(reject)?;
+    if p.host != b.host {
+        return Err(reject(format!("Diese Sitzung gilt nur für {}", b.host)));
+    }
+    Ok(p)
+}
+
 /// Prüft die Anfrage gegen die Freigabe des Eintrags, ohne das Geheimnis anzufassen.
-fn check_request(app: &AppHandle, req: &HttpRequest) -> Result<(String, http::Prepared, u32), Refusal> {
+fn check_request(app: &AppHandle, req: &HttpRequest, mode: &Mode) -> Result<(String, http::Prepared, u32), Refusal> {
     let state = app.state::<AppState>();
     let g = state.lock();
     let v = available(&g)?;
     let not_found = || ("Eintrag nicht gefunden oder nicht für KI-Assistenten freigegeben".to_string(), Outcome::Rejected);
-    let e = v.data.entries.iter().find(|e| e.id == req.entry_id).ok_or_else(not_found)?;
-    let policy = e.agent.as_ref().filter(|a| a.enabled).ok_or_else(not_found)?;
-    let prepared = http::prepare(req, policy).map_err(|m| (m, Outcome::Rejected))?;
+    let found = v.data.entries.iter().find(|e| e.id == req.entry_id).and_then(|e| Some((e, e.agent.as_ref().filter(|a| a.enabled)?)));
+    let Some((e, policy)) = found else {
+        if let Mode::Use(id) = mode {
+            session::close(id);
+        }
+        return Err(not_found());
+    };
+    let prepared = prepare_for(req, policy, mode)?;
     Ok((e.title.clone(), prepared, policy.session_minutes))
 }
 
 /// Holt Benutzername und Passwort nach der Zustimmung. Die Freigabe wird erneut geprüft,
-/// weil sie sich während des Dialogs geändert haben kann.
-fn credentials(app: &AppHandle, req: &HttpRequest, approved: &http::Prepared) -> Result<http::Credentials, Refusal> {
+/// weil sie sich während des Dialogs geändert haben kann. In einer Sitzung dienen die
+/// Zugangsdaten nur dazu, sie aus der Antwort zu entfernen.
+fn credentials(app: &AppHandle, req: &HttpRequest, mode: &Mode, approved: &http::Prepared) -> Result<http::Credentials, Refusal> {
     let state = app.state::<AppState>();
     let g = state.lock();
     let v = available(&g)?;
     let changed = || ("Die Freigabe wurde während der Bestätigung geändert".to_string(), Outcome::Rejected);
     let e = v.data.entries.iter().find(|e| e.id == req.entry_id).ok_or_else(changed)?;
     let policy = e.agent.as_ref().filter(|a| a.enabled).ok_or_else(changed)?;
-    let again = http::prepare(req, policy).map_err(|_| changed())?;
-    if again.auth != approved.auth || again.host != approved.host {
+    let again = prepare_for(req, policy, mode).map_err(|_| changed())?;
+    if again.auth != approved.auth || again.host != approved.host || again.inject != approved.inject {
         return Err(changed());
     }
     http::Credentials::from_entry(e)
@@ -222,12 +286,21 @@ fn http_request(app: &AppHandle, req: &HttpRequest) -> Response {
         Err(msg)
     };
     let request_line = format!("{} {}", req.method.trim().to_ascii_uppercase(), short_url(&req.url));
-
-    let (title, prepared, session_minutes) = match check_request(app, req) {
-        Ok(x) => x,
-        Err(r) => return refuse(r, request_line),
+    let mode = match Mode::of(req) {
+        Ok(m) => m,
+        Err(m) => return refuse((m, Outcome::Rejected), request_line),
     };
-    let detail = format!("{} · {title}", prepared.summary());
+
+    let (title, prepared, session_minutes) = match check_request(app, req, &mode) {
+        Ok(x) => x,
+        Err(r) if mode == Mode::Single => return refuse(r, request_line),
+        Err(r) => return refuse(r, format!("{request_line} · {}", mode.label())),
+    };
+    let mut detail = format!("{} · {title}", prepared.summary());
+    if mode != Mode::Single {
+        detail = format!("{detail} · {}", mode.label());
+    }
+    // Folgeanfragen einer Sitzung fallen unter dieselbe Sitzungsfreigabe wie das Login.
     let key = (req.entry_id.clone(), prepared.host.clone(), prepared.auth.key());
 
     let pending = Pending {
@@ -238,17 +311,68 @@ fn http_request(app: &AppHandle, req: &HttpRequest) -> Response {
         host: prepared.host.clone(),
         path: prepared.url.path().to_string(),
         auth: prepared.auth.key(),
+        session: match mode {
+            Mode::Single => String::new(),
+            Mode::New => "new".into(),
+            Mode::Use(_) => "use".into(),
+        },
         session_minutes,
         expires_at: 0,
     };
     let approval_note = confirm(app, TOOL, pending, key, &detail)?;
 
-    let creds = match credentials(app, req, &prepared) {
+    let creds = match credentials(app, req, &mode, &prepared) {
         Ok(c) => c,
         Err(r) => return refuse(r, detail),
     };
-    let source = creds.source.key();
-    let result = http::execute(&prepared, &creds);
+    let source = if prepared.inject { creds.source.key() } else { "cookies" };
+    let result = match &mode {
+        Mode::Single => http::execute(&prepared, &creds, None),
+        Mode::New => {
+            let mut jar = http::Jar::default();
+            http::execute(&prepared, &creds, Some(&mut jar)).map(|mut v| {
+                let ok = v["status"].as_u64().is_some_and(|s| s < 400);
+                v["session"] = if ok && !jar.is_empty() {
+                    let cookies = jar.len();
+                    let binding = session::Binding {
+                        entry_id: req.entry_id.clone(),
+                        host: prepared.host.clone(),
+                        auth: prepared.auth.clone(),
+                    };
+                    json!({
+                        "id": session::open(binding, jar),
+                        "cookies": cookies,
+                        "idleMinutes": session::IDLE.as_secs() / 60,
+                        "hint": "Folgeanfragen an diesen Host mit session: <id> senden (ohne auth). Zum Schluss \
+                            abmelden und dabei end_session: true setzen.",
+                    })
+                } else {
+                    let why = if ok { "Der Server hat keine Cookies gesetzt" } else { "Die Anmeldung ist fehlgeschlagen" };
+                    json!({ "id": null, "hint": format!("{why} – keine Sitzung angelegt.") })
+                };
+                v
+            })
+        }
+        Mode::Use(id) => {
+            let binding = session::Binding {
+                entry_id: req.entry_id.clone(),
+                host: prepared.host.clone(),
+                auth: prepared.auth.clone(),
+            };
+            match session::checkout(id, &binding) {
+                Err(m) => Err(m),
+                Ok(mut jar) => {
+                    let r = http::execute(&prepared, &creds, Some(&mut jar));
+                    let active = !req.end_session && !jar.is_empty();
+                    session::checkin(id, jar, req.end_session);
+                    r.map(|mut v| {
+                        v["session"] = json!({ "id": id, "active": active });
+                        v
+                    })
+                }
+            }
+        }
+    };
     drop(creds);
     match result {
         Ok(v) => {
@@ -337,6 +461,7 @@ fn fill_login(app: &AppHandle, req: &FillLogin) -> Response {
         host: target.clone(),
         path: String::new(),
         auth: if has_totp { "password+totp" } else { "password" }.into(),
+        session: String::new(),
         session_minutes,
         expires_at: 0,
     };

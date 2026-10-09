@@ -17,7 +17,8 @@ const INSTRUCTIONS: &str = "Remember Key ist ein lokaler Passwort-Manager. Über
 Einträge, die der Nutzer für KI-Assistenten freigegeben hat, und nur deren Metadaten. Passwörter, Notizen und \
 2FA-Schlüssel werden nie herausgegeben – bitte den Nutzer nicht danach fragen. Mit http_request kannst du \
 authentifizierte HTTPS-Anfragen stellen: Remember Key setzt die Zugangsdaten selbst ein, nachdem der Nutzer \
-zugestimmt hat.";
+zugestimmt hat. Für APIs mit Session-Cookie (z. B. Acumatica) meldest du dich mit session: \"new\" an und \
+schickst Folgeanfragen mit der zurückgegebenen Sitzungs-ID; die Cookies behält Remember Key.";
 
 fn main() {
     let stdin = io::stdin();
@@ -99,7 +100,12 @@ fn tools() -> Value {
                 muss die Anfrage in Remember Key bestätigen – das kann bis zu 60 Sekunden dauern. Weiterleitungen \
                 werden nicht verfolgt. Setze selbst keine Authorization- oder Cookie-Header. Die Antwort nennt unter \
                 `injected`, wo die Zugangsdaten eingesetzt wurden. Bei wiederholtem 401/403 nicht einfach erneut \
-                versuchen (jeder Versuch kostet eine Bestätigung), sondern den Nutzer bitten, Token und Freigabe zu prüfen.",
+                versuchen (jeder Versuch kostet eine Bestätigung), sondern den Nutzer bitten, Token und Freigabe zu prüfen. \
+                Cookie-Sitzung für APIs, die sich die Anmeldung per Cookie merken (z. B. Acumatica: POST \
+                /entity/auth/login, danach /CustomizationApi/...): Login mit session: \"new\" senden; die Antwort enthält \
+                unter session.id eine Sitzungs-ID. Folgeanfragen an denselben Host mit session: <id> und ohne auth \
+                senden – Remember Key schickt die Cookies mit, du siehst sie nie. Anfragen einer Sitzung nacheinander \
+                senden. Zum Schluss abmelden (z. B. POST /entity/auth/logout) mit end_session: true.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -123,7 +129,17 @@ fn tools() -> Value {
                         "type": "string",
                         "description": "Einsetz-Stelle aus list_entries (bearer, basic, header:<Name>, form:<Name>, \
                             json:<Name>). Nur nötig, wenn mehrere erlaubt sind. Bei form/json den Body ohne dieses Feld \
-                            schicken (Formular bzw. JSON-Objekt); Remember Key ergänzt es."
+                            schicken (Formular bzw. JSON-Objekt); Remember Key ergänzt es. In einer Sitzung weglassen."
+                    },
+                    "session": {
+                        "type": "string",
+                        "description": "Cookie-Sitzung: \"new\" beim Login (Remember Key behält die Cookies der Antwort), \
+                            sonst die session.id aus der Login-Antwort für Folgeanfragen."
+                    },
+                    "end_session": {
+                        "type": "boolean",
+                        "description": "Sitzung nach dieser Anfrage beenden (beim Logout). Nur zusammen mit einer Sitzungs-ID.",
+                        "default": false
                     }
                 },
                 "required": ["entry_id", "url"],
@@ -212,6 +228,11 @@ fn http_request(args: &Value) -> Result<HttpRequest, String> {
         headers,
         body: text("body"),
         auth: text("auth"),
+        session: text("session").filter(|s| !s.trim().is_empty()),
+        end_session: match args.get("end_session") {
+            None | Some(Value::Null) => false,
+            Some(v) => v.as_bool().ok_or("end_session muss true oder false sein")?,
+        },
     })
 }
 
@@ -312,6 +333,10 @@ mod tests {
         assert!(http_request(&json!({ "url": "https://x.de" })).is_err());
         assert!(http_request(&json!({ "entry_id": "1", "url": "u", "headers": { "A": 1 } })).is_err());
         assert!(http_request(&json!({ "entry_id": "1", "url": "u", "headers": "A: b" })).is_err());
+        let r = http_request(&json!({ "entry_id": "1", "url": "https://x.de", "session": "s_1", "end_session": true })).unwrap();
+        assert_eq!(r.session.as_deref(), Some("s_1"));
+        assert!(r.end_session);
+        assert!(http_request(&json!({ "entry_id": "1", "url": "u", "end_session": "ja" })).is_err());
     }
 
     #[test]

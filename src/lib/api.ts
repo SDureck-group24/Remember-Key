@@ -141,6 +141,8 @@ export interface PendingApproval {
   path: string;
   /** `bearer`, `basic` oder `header:<Name>` */
   auth: string;
+  /** Cookie-Sitzung: `""` keine, `new` Login legt Sitzung an, `use` Folgeanfrage ohne Geheimnis. */
+  session: "" | "new" | "use";
   /** 0 = keine Sitzungsfreigabe möglich. */
   sessionMinutes: number;
   /** Unix-Zeit der automatischen Ablehnung. */

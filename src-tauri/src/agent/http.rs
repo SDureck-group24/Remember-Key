@@ -9,6 +9,8 @@
 //! - Redirects werden nicht verfolgt (jeder Folgeaufruf wird neu geprüft)
 //! - aus der Antwort werden Geheimnis und gängige Kodierungen entfernt, Cookies und
 //!   Auth-Header fallen ganz weg
+//! - Cookie-Sitzungen: Cookies einer Login-Anfrage behält die App in einem `Jar`; Folgeanfragen
+//!   derselben Sitzung bekommen sie gesetzt, ohne dass ein Geheimnis eingesetzt wird
 
 use std::io::Read;
 use std::time::Duration;
@@ -30,6 +32,10 @@ const MAX_BODY: usize = 512 * 1024;
 const REDACTED: &str = "***";
 /// Antwort-Header, die nie an die KI gehen.
 const DROPPED_RESPONSE_HEADERS: [&str; 4] = ["set-cookie", "set-cookie2", "authorization", "proxy-authorization"];
+/// Höchstzahl Cookies pro Sitzung.
+const MAX_COOKIES: usize = 50;
+/// Kürzere Cookie-Werte werden nicht aus Antworten entfernt (sonst träfe es z. B. `1` oder `de`).
+const MIN_REDACTED_COOKIE: usize = 8;
 
 /// Welches Geheimnis eingesetzt wird.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -95,7 +101,10 @@ pub struct Prepared {
     pub host: String,
     pub headers: Vec<(String, String)>,
     pub body: Option<String>,
+    /// Einsetz-Stelle; in einer Cookie-Sitzung die des Logins.
     pub auth: AuthLocation,
+    /// `false` in einer Cookie-Sitzung: kein Geheimnis einsetzen, nur die Cookies.
+    pub inject: bool,
 }
 
 impl Prepared {
@@ -107,6 +116,23 @@ impl Prepared {
 
 /// Prüft eine Anfrage der KI gegen die Freigabe des Eintrags.
 pub fn prepare(req: &HttpRequest, policy: &AgentPolicy) -> Result<Prepared, String> {
+    let auth = choose_auth(req.auth.as_deref(), &policy.auth)?;
+    check(req, policy, auth, true)
+}
+
+/// Prüft eine Folgeanfrage in einer Cookie-Sitzung, deren Login über `auth` lief. Die
+/// Einsetz-Stelle muss weiterhin freigegeben sein; eingesetzt wird nichts.
+pub fn prepare_in_session(req: &HttpRequest, policy: &AgentPolicy, auth: &AuthLocation) -> Result<Prepared, String> {
+    if req.auth.as_deref().is_some_and(|a| !a.trim().is_empty()) {
+        return Err("In einer Sitzung kein `auth` angeben – Remember Key setzt die Sitzungs-Cookies selbst".into());
+    }
+    if !policy.auth.contains(auth) {
+        return Err("Die Einsetz-Stelle des Logins ist für diesen Eintrag nicht mehr freigegeben".into());
+    }
+    check(req, policy, auth.clone(), false)
+}
+
+fn check(req: &HttpRequest, policy: &AgentPolicy, auth: AuthLocation, inject: bool) -> Result<Prepared, String> {
     let method = req.method.trim().to_ascii_uppercase();
     if !METHODS.contains(&method.as_str()) {
         return Err(format!("Methode {method} ist nicht erlaubt (erlaubt: {})", METHODS.join(", ")));
@@ -128,8 +154,6 @@ pub fn prepare(req: &HttpRequest, policy: &AgentPolicy) -> Result<Prepared, Stri
             policy.hosts.join(", ")
         ));
     }
-
-    let auth = choose_auth(req.auth.as_deref(), &policy.auth)?;
 
     if req.headers.len() > MAX_HEADERS {
         return Err(format!("Höchstens {MAX_HEADERS} Header erlaubt"));
@@ -155,9 +179,11 @@ pub fn prepare(req: &HttpRequest, policy: &AgentPolicy) -> Result<Prepared, Stri
     if req.body.is_some() && matches!(method.as_str(), "GET" | "HEAD") {
         return Err(format!("{method}-Anfragen haben keinen Body"));
     }
-    check_body_field(&auth, &method, &headers, req.body.as_deref())?;
+    if inject {
+        check_body_field(&auth, &method, &headers, req.body.as_deref())?;
+    }
 
-    Ok(Prepared { method, url, host, headers, body: req.body.clone(), auth })
+    Ok(Prepared { method, url, host, headers, body: req.body.clone(), auth, inject })
 }
 
 /// Content-Type, den ein Body mit eingesetztem Feld haben muss.
@@ -254,8 +280,73 @@ fn auth_value(auth: &AuthLocation, username: &str, password: &str) -> Zeroizing<
     })
 }
 
-/// Führt die Anfrage aus und gibt die bereinigte Antwort zurück.
-pub fn execute(p: &Prepared, c: &Credentials) -> Result<Value, String> {
+/// Cookies einer Sitzung. Nur Name und Wert: die Sitzung ist an genau einen Host gebunden,
+/// Domain und Pfad spielen daher keine Rolle.
+#[derive(Default)]
+pub struct Jar(Vec<(String, Zeroizing<String>)>);
+
+impl Jar {
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    /// Wert für den `Cookie`-Header.
+    fn header(&self) -> Option<Zeroizing<String>> {
+        if self.0.is_empty() {
+            return None;
+        }
+        let parts: Vec<String> = self.0.iter().map(|(n, v)| format!("{n}={}", v.as_str())).collect();
+        Some(Zeroizing::new(parts.join("; ")))
+    }
+
+    /// Übernimmt einen `Set-Cookie`-Header. Leere und abgelaufene Cookies (`Max-Age<=0`,
+    /// `Expires` in einem vergangenen Jahr) werden gelöscht.
+    pub(super) fn store(&mut self, header: &str) {
+        let mut parts = header.split(';');
+        let Some((name, value)) = parts.next().and_then(|p| p.split_once('=')) else { return };
+        let name = name.trim();
+        let value = value.trim().trim_matches('"');
+        let valid = |s: &str| s.bytes().all(|b| b.is_ascii_graphic() && !b",;\\\"".contains(&b));
+        if name.is_empty() || !valid(name) || !valid(value) {
+            return;
+        }
+        let expired = parts.any(|attr| {
+            let (k, v) = attr.split_once('=').unwrap_or((attr, ""));
+            match k.trim().to_ascii_lowercase().as_str() {
+                "max-age" => v.trim().parse::<i64>().is_ok_and(|n| n <= 0),
+                "expires" => expires_year(v).is_some_and(|y| y < current_year()),
+                _ => false,
+            }
+        });
+        self.0.retain(|(n, _)| n != name);
+        if !expired && !value.is_empty() && self.0.len() < MAX_COOKIES {
+            self.0.push((name.to_string(), Zeroizing::new(value.to_string())));
+        }
+    }
+
+    /// Cookie-Werte, die aus Antworten entfernt werden.
+    fn needles(&self) -> impl Iterator<Item = &str> {
+        self.0.iter().map(|(_, v)| v.as_str()).filter(|v| v.len() >= MIN_REDACTED_COOKIE)
+    }
+}
+
+/// Jahreszahl aus einem `Expires`-Datum (`Thu, 01-Jan-1970 00:00:00 GMT`).
+fn expires_year(date: &str) -> Option<i64> {
+    date.split(|c: char| !c.is_ascii_digit()).find(|t| t.len() == 4).and_then(|t| t.parse().ok())
+}
+
+fn current_year() -> i64 {
+    // Auf ein Jahr genau reicht hier.
+    1970 + crate::now() / 31_556_952
+}
+
+/// Führt die Anfrage aus und gibt die bereinigte Antwort zurück. Mit `jar` werden dessen
+/// Cookies mitgeschickt und neue Cookies der Antwort darin gespeichert.
+pub fn execute(p: &Prepared, c: &Credentials, jar: Option<&mut Jar>) -> Result<Value, String> {
     let agent = ureq::AgentBuilder::new()
         .redirects(0)
         .timeout_connect(Duration::from_secs(10))
@@ -266,14 +357,20 @@ pub fn execute(p: &Prepared, c: &Credentials) -> Result<Value, String> {
     for (name, value) in &p.headers {
         request = request.set(name, value);
     }
-    if let Some(header) = p.auth.header_name() {
-        let value = auth_value(&p.auth, &c.username, &c.secret);
-        request = request.set(header, &value);
+    if let Some(cookie) = jar.as_deref().and_then(Jar::header) {
+        request = request.set("Cookie", &cookie);
     }
-    let secret_body = body_with_secret(&p.auth, p.body.as_deref(), &c.secret)?;
-    if let Some(ct) = body_content_type(&p.auth) {
-        if !p.headers.iter().any(|(n, _)| n.eq_ignore_ascii_case("content-type")) {
-            request = request.set("Content-Type", ct);
+    let mut secret_body = None;
+    if p.inject {
+        if let Some(header) = p.auth.header_name() {
+            let value = auth_value(&p.auth, &c.username, &c.secret);
+            request = request.set(header, &value);
+        }
+        secret_body = body_with_secret(&p.auth, p.body.as_deref(), &c.secret)?;
+        if let Some(ct) = body_content_type(&p.auth) {
+            if !p.headers.iter().any(|(n, _)| n.eq_ignore_ascii_case("content-type")) {
+                request = request.set("Content-Type", ct);
+            }
         }
     }
 
@@ -290,7 +387,17 @@ pub fn execute(p: &Prepared, c: &Credentials) -> Result<Value, String> {
         }
     };
 
-    let needles = c.needles();
+    let mut needles = c.needles();
+    if let Some(j) = jar {
+        // Alte Werte zuerst merken: auch ein gerade gelöschtes Cookie darf nicht in der Antwort stehen.
+        let old: Vec<Zeroizing<String>> = j.needles().map(|v| Zeroizing::new(v.to_string())).collect();
+        for h in response.all("set-cookie") {
+            j.store(h);
+        }
+        needles.extend(old);
+        needles.extend(j.needles().map(|v| Zeroizing::new(v.to_string())));
+        needles.sort_by_key(|s| std::cmp::Reverse(s.len()));
+    }
     let status = response.status();
     let status_text = response.status_text().to_string();
     let mut headers = Map::new();
@@ -328,7 +435,15 @@ pub fn execute(p: &Prepared, c: &Credentials) -> Result<Value, String> {
         "body": body,
         "truncated": truncated,
         // Geheimnisfreie Diagnose: wo Remember Key die Zugangsdaten eingesetzt hat.
-        "injected": injected(&p.auth, c),
+        "injected": if p.inject {
+            injected(&p.auth, c)
+        } else {
+            json!({
+                "location": "session",
+                "hint": "Kein Geheimnis eingesetzt, nur die Cookies der Sitzung. Bei 401 ist die Anmeldung auf dem \
+                    Server abgelaufen – mit session: \"new\" neu anmelden.",
+            })
+        },
     });
     if (300..400).contains(&status) {
         out["note"] = json!("Weiterleitungen werden nicht verfolgt. Bei Bedarf die Location-Adresse erneut anfragen.");
@@ -442,6 +557,8 @@ mod tests {
             headers: BTreeMap::new(),
             body: None,
             auth: None,
+            session: None,
+            end_session: false,
         }
     }
 
@@ -654,12 +771,59 @@ mod tests {
             let p = prepare(&r, &pol).unwrap();
             let mut e = entry(pw, "");
             e.username = "tester".into();
-            let out = execute(&p, &Credentials::from_entry(&e).unwrap()).unwrap();
+            let out = execute(&p, &Credentials::from_entry(&e).unwrap(), None).unwrap();
             let text = out.to_string();
             assert_eq!(out["status"], 200, "{text}");
             assert!(text.contains(REDACTED), "{text}");
             assert!(!text.contains(pw) && !text.contains(&BASE64.encode(format!("tester:{pw}").as_bytes())), "{text}");
         }
+    }
+
+    #[test]
+    fn session_requests_inject_nothing() {
+        let pol = policy(vec![AuthLocation::JsonField { name: "password".into() }]);
+        let login = AuthLocation::JsonField { name: "password".into() };
+        let mut r = req("https://api.github.com/CustomizationApi/getProject");
+        r.method = "POST".into();
+        // In der Sitzung wird kein Feld eingesetzt, der Body bleibt unverändert erlaubt.
+        r.body = Some(r#"{"projectName":"X","password":"egal"}"#.into());
+        let p = prepare_in_session(&r, &pol, &login).unwrap();
+        assert!(!p.inject);
+        assert_eq!(p.auth, login);
+        r.auth = Some("json:password".into());
+        assert!(prepare_in_session(&r, &pol, &login).is_err(), "auth in Sitzung");
+        r.auth = None;
+        assert!(prepare_in_session(&r, &pol, &AuthLocation::Bearer).is_err(), "Login-Stelle nicht mehr frei");
+        r.headers.insert("Cookie".into(), "a=b".into());
+        assert!(prepare_in_session(&r, &pol, &login).is_err(), "Cookie-Header der KI");
+        // Andere Hosts bleiben gesperrt.
+        r.headers.clear();
+        r.url = "https://github.com/".into();
+        assert!(prepare_in_session(&r, &pol, &login).is_err());
+    }
+
+    #[test]
+    fn jar_stores_replaces_and_expires() {
+        let mut j = Jar::default();
+        j.store("ASP.NET_SessionId=abc123def456; path=/; HttpOnly; SameSite=Lax");
+        j.store(".ASPXAUTH=\"tok-1\"; path=/; secure");
+        j.store("Locale=Culture=de-DE&TimeZone=GMTP0100; path=/");
+        assert_eq!(j.len(), 3);
+        j.store(".ASPXAUTH=tok-2; path=/");
+        assert_eq!(
+            j.header().unwrap().as_str(),
+            "ASP.NET_SessionId=abc123def456; Locale=Culture=de-DE&TimeZone=GMTP0100; .ASPXAUTH=tok-2"
+        );
+        j.store(".ASPXAUTH=; expires=Mon, 11-Oct-1999 22:00:00 GMT; path=/");
+        j.store("Locale=x; Max-Age=0");
+        j.store("kaputt");
+        j.store("a b=c");
+        assert_eq!(j.header().unwrap().as_str(), "ASP.NET_SessionId=abc123def456");
+        j.store("future=wert12345; expires=Thu, 01 Jan 2099 00:00:00 GMT");
+        assert_eq!(j.len(), 2);
+        // Kurze Werte werden nicht geschwärzt, lange schon.
+        j.store("k=1");
+        assert_eq!(j.needles().collect::<Vec<_>>(), ["abc123def456", "wert12345"]);
     }
 
     #[test]

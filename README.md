@@ -59,6 +59,11 @@ Nach Änderungen am Designsystem `styles.css` neu kopieren.
   eigenen Header. Erlaubt ist das nur per `https` (`http` nur für localhost), nur an die Hosts des Eintrags und erst
   nach Bestätigung im Fenster (60 s, optional als Sitzungsfreigabe bis zum Sperren). Das Geheimnis
   wird samt gängigen Kodierungen aus der Antwort entfernt, und Redirects werden nicht verfolgt.
+- Cookie-Sitzungen für APIs, die sich die Anmeldung per Cookie merken (z. B. die Acumatica-Customization-API):
+  Ein Login mit `session: "new"` legt in der App eine Sitzung an. Die App behält die `Set-Cookie`-Werte, und die KI
+  bekommt nur eine zufällige Sitzungs-ID. Folgeanfragen mit `session: <id>` bekommen die Cookies mitgeschickt; dabei
+  wird kein Geheimnis eingesetzt. Die Sitzung ist an Eintrag, Host und Einsetz-Stelle gebunden und endet mit
+  `end_session: true`, nach 15 Minuten ohne Nutzung, spätestens nach einer Stunde und beim Sperren.
 - `fill_login`: Die Browser-Erweiterung (`extension/`, für Chrome/Edge und Zen/Firefox) füllt nach Bestätigung
   Benutzername und Passwort im passenden Tab aus und sendet sofort ab. Sie ist über Native Messaging mit der App
   verbunden (`remember-key-browser.exe`). Die App registriert den Host beim Entsperren unter HKCU. Laden in Chrome:

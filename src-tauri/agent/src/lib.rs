@@ -91,6 +91,13 @@ pub struct HttpRequest {
     /// Einsetz-Stelle (`bearer`, `basic`, `header:<Name>`); optional, wenn nur eine erlaubt ist.
     #[serde(default)]
     pub auth: Option<String>,
+    /// Cookie-Sitzung: `new` meldet an und behält die Cookies der Antwort in der App, eine
+    /// Sitzungs-ID schickt sie bei Folgeanfragen mit. Die Cookies selbst sieht die KI nie.
+    #[serde(default)]
+    pub session: Option<String>,
+    /// Sitzung nach dieser Anfrage beenden (z. B. beim Logout).
+    #[serde(default)]
+    pub end_session: bool,
 }
 
 fn default_method() -> String {
@@ -449,6 +456,14 @@ mod tests {
         let Request::HttpRequest(r) = req else { panic!() };
         assert_eq!(r.method, "GET");
         assert!(r.headers.is_empty() && r.body.is_none() && r.auth.is_none());
+        assert!(r.session.is_none() && !r.end_session);
+        let req: Request = serde_json::from_str(
+            r#"{"op":"http_request","entryId":"1","url":"https://x.de","session":"s_1","endSession":true}"#,
+        )
+        .unwrap();
+        let Request::HttpRequest(r) = req else { panic!() };
+        assert_eq!(r.session.as_deref(), Some("s_1"));
+        assert!(r.end_session);
     }
 
     #[test]

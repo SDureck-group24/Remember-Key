@@ -82,7 +82,7 @@ Host, Entscheidung und Client. Die Datei wird auf 1000 Zeilen begrenzt.
 | Tool | Eingabe | Rückgabe an KI | Geheimnis wird … |
 |---|---|---|---|
 | `list_entries` | `query?` | `id`, `title`, `username`, `hosts`, `auth`, `hasTotp` (nur freigegebene Einträge) | nicht berührt |
-| `http_request` | `entry_id`, `url`, `method?`, `headers?`, `body?`, `auth?` | Status, Header und Body, bereinigt | vom Backend in den Request gesetzt (ureq) |
+| `http_request` | `entry_id`, `url`, `method?`, `headers?`, `body?`, `auth?`, `session?`, `end_session?` | Status, Header und Body, bereinigt | vom Backend in den Request gesetzt (ureq) |
 | `fill_login` | `entry_id`, `url?` | Host, Titel, ausgefüllte Felder, abgesendet | von der Browser-Erweiterung in den passenden Tab gefüllt und sofort abgesendet |
 
 Regeln für `http_request`:
@@ -105,6 +105,20 @@ Regeln für `http_request`:
   `Benutzer:Passwort` jeweils als Klartext, Base64 (Standard und URL-sicher, mit und ohne Padding), Hex,
   Prozent- und Formularkodierung, JSON- und HTML-Escaping. Das gilt auch für Fehlermeldungen.
 - Header wie `Authorization` und `Set-Cookie` werden aus der Antwort entfernt.
+- **Cookie-Sitzungen** (`session`): Mit `session: "new"` wird das Geheimnis wie gewohnt eingesetzt, und die
+  Cookies der Antwort bleiben in einem Cookie-Speicher der App (nur Name und Wert, `Zeroizing`). Die KI
+  bekommt nur `session.id` zurück (`s_` + 128 Bit Zufall). Folgeanfragen mit `session: <id>` setzen kein
+  Geheimnis ein, nur den `Cookie`-Header. `auth` ist dann verboten. Jede Folgeanfrage wird erneut gegen die
+  Freigabe geprüft und fällt unter dieselbe Sitzungsfreigabe wie das Login (Eintrag, Host, Einsetz-Stelle).
+  Ohne Sitzungsfreigabe wird jede Anfrage einzeln bestätigt. Die Sitzung ist an den Host des Logins
+  gebunden und endet so:
+  - mit `end_session: true`
+  - wenn der Server alle Cookies löscht
+  - nach 15 Minuten ohne Nutzung, spätestens nach einer Stunde
+  - beim Sperren
+  - wenn die Freigabe nicht mehr passt
+
+  Cookie-Werte ab 8 Zeichen werden wie das Geheimnis aus Antworten entfernt.
 - Größenlimit für den Antwort-Body: 512 KiB (danach `truncated: true`). Binärdaten werden nur als Größe
   gemeldet.
 - Geheimnisse liegen nur in `Zeroizing`-Puffern und werden nach dem Request genullt. Ausnahme: Kopien,
