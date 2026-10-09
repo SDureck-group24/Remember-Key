@@ -225,7 +225,12 @@ export const api = {
     invoke<void>("change_master_password", { current, newPassword }),
 
   list: () => invoke<EntrySummary[]>("list_entries"),
-  get: (id: string) => invoke<EntryDetail>("get_entry", { id }),
+  // Das Backend lässt leere/Standardfelder der Freigabe weg (kompakte Tresordatei).
+  get: (id: string) =>
+    invoke<EntryDetail>("get_entry", { id }).then((d) => ({
+      ...d,
+      agent: { enabled: false, hosts: [], auth: [], sessionMinutes: 0, fillLogin: false, ...(d.agent as Partial<AgentPolicy>) },
+    })),
   revealPassword: (id: string) => invoke<string>("reveal_password", { id }),
   revealApiToken: (id: string) => invoke<string>("reveal_api_token", { id }),
   passwordStrength: (password: string) => invoke<Strength>("password_strength", { password }),
