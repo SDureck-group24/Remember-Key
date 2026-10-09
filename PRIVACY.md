@@ -54,8 +54,8 @@ for updates in the background and does not send crash reports.
 
 The extension collects no data and makes no network requests of its own. It communicates only with the
 Remember Key app on your computer (native messaging). It receives username, password or 2FA code from
-the app only for a login you have just confirmed, keeps them in memory just long enough to fill in the
-form, and does not save them.
+the app only for a login you have just confirmed or started yourself with "Website aufrufen" in the app,
+keeps them in memory just long enough to fill in the form, and does not save them.
 
 Permissions it uses:
 
@@ -127,8 +127,9 @@ nicht im Hintergrund nach Updates und sendet keine Absturzberichte.
 
 Die Erweiterung erhebt keine Daten und stellt selbst keine Verbindungen ins Internet her. Sie spricht nur
 mit der Remember-Key-App auf deinem Rechner (Native Messaging). Benutzername, Passwort oder 2FA-Code
-erhält sie von der App nur für einen Login, den du gerade bestätigt hast. Sie hält sie nur so lange im
-Speicher, bis das Formular ausgefüllt ist, und speichert sie nicht.
+erhält sie von der App nur für einen Login, den du gerade bestätigt oder mit „Website aufrufen“ in der App
+selbst gestartet hast. Sie hält sie nur so lange im Speicher, bis das Formular ausgefüllt ist, und
+speichert sie nicht.
 
 Verwendete Berechtigungen:
 

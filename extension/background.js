@@ -36,7 +36,8 @@ async function connect() {
       if (port === p) port = null;
     });
     port = p;
-    p.postMessage({ type: "hello", browser: await browserName() });
+    // `features`: Die App schickt automatische Logins (Aufrufen) nur an Erweiterungen mit passwordOnly.
+    p.postMessage({ type: "hello", browser: await browserName(), features: ["passwordOnly"] });
   } catch {
     port = null;
   } finally {
@@ -87,7 +88,7 @@ function tabMatches(tab, hosts, hint) {
   }
 }
 
-async function fill({ hosts, hostHint, username, password, otp }) {
+async function fill({ hosts, hostHint, username, password, otp, passwordOnly }) {
   const tabs = (await chrome.tabs.query({})).filter((t) => tabMatches(t, hosts, hostHint));
   if (!tabs.length) {
     throw new Error(`Kein offener Tab mit ${hostHint ?? hosts.join(", ")} in diesem Browser`);
@@ -95,10 +96,12 @@ async function fill({ hosts, hostHint, username, password, otp }) {
   // Aktiver Tab zuerst, sonst der zuletzt benutzte.
   tabs.sort((a, b) => Number(b.active) - Number(a.active) || (b.lastAccessed ?? 0) - (a.lastAccessed ?? 0));
   const tab = tabs[0];
+  // Aufrufen aus der App: Die App versucht es erneut, bis die Seite fertig geladen ist.
+  if (passwordOnly && tab.status !== "complete") throw new Error("Die Seite lädt noch");
   const [res] = await chrome.scripting.executeScript({
     target: { tabId: tab.id },
     func: fillInPage,
-    args: [hosts, username, password, otp ?? null],
+    args: [hosts, username, password, otp ?? null, !!passwordOnly],
   });
   const r = res?.result;
   if (!r?.ok) throw new Error(r?.error ?? "Ausfüllen fehlgeschlagen");
@@ -106,7 +109,7 @@ async function fill({ hosts, hostHint, username, password, otp }) {
 }
 
 // Läuft in der Seite (isolierte Welt der Erweiterung). Muss in sich abgeschlossen sein.
-function fillInPage(hosts, username, password, otp) {
+function fillInPage(hosts, username, password, otp, passwordOnly) {
   const host = location.hostname.toLowerCase().replace(/\.$/, "");
   const allowed = hosts.some((h) =>
     h.startsWith("*.") ? host.endsWith(h.slice(1)) && host.length > h.length - 1 : h === host,
@@ -124,6 +127,8 @@ function fillInPage(hosts, username, password, otp) {
     return el.getClientRects().length > 0;
   };
   const pw = [...document.querySelectorAll('input[type="password"]')].find(usable) ?? null;
+  // Ohne Passwortfeld könnte auf einer schon angemeldeten Seite ein beliebiges Feld getroffen werden.
+  if (passwordOnly && !pw) return { ok: false, error: "Kein Login-Formular mit Passwortfeld auf der Seite" };
   const scope = pw?.form ?? document;
   const userFields = [
     ...scope.querySelectorAll('input[type="email"], input[type="text"], input[type="tel"], input:not([type])'),

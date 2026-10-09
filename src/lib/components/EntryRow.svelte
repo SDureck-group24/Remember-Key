@@ -10,11 +10,13 @@
     showFolder = false,
     onopen,
     oncopy,
+    onvisit,
   }: {
     entry: EntrySummary;
     showFolder?: boolean;
     onopen: () => void;
     oncopy: (field: CopyField, label: string) => void;
+    onvisit: () => void;
   } = $props();
 
   let initial = $derived([...entry.title.trim()][0]?.toUpperCase() ?? "?");
@@ -66,6 +68,11 @@
     <button class="btn btn-icon btn-sm" title="Passwort kopieren" aria-label="Passwort von {entry.title} kopieren" onclick={() => oncopy("password", "Passwort")}>
       <Icon name="copy" size={15} />
     </button>
+    {#if entry.url}
+      <button class="btn btn-icon btn-sm" title="Website aufrufen" aria-label="Website von {entry.title} aufrufen" onclick={onvisit}>
+        <Icon name="arrow-square-out" size={15} />
+      </button>
+    {/if}
   </span>
 </div>
 
@@ -73,7 +80,7 @@
   .row-item {
     position: relative;
     display: grid;
-    grid-template-columns: 28px minmax(0, 1.3fr) minmax(0, 1fr) 76px 68px;
+    grid-template-columns: 28px minmax(0, 1.3fr) minmax(0, 1fr) 76px 98px;
     align-items: center;
     gap: var(--space-4);
     padding: var(--space-3) var(--space-2) var(--space-3) var(--space-3);
@@ -197,7 +204,7 @@
   /* Schmale Liste: Benutzername wandert in die zweite Zeile. */
   @container entries (max-width: 560px) {
     .row-item {
-      grid-template-columns: 28px minmax(0, 1fr) auto 68px;
+      grid-template-columns: 28px minmax(0, 1fr) auto 98px;
     }
     .user {
       display: none;

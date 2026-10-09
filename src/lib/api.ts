@@ -248,6 +248,8 @@ export const api = {
 
   copyField: (id: string, field: CopyField) => invoke<number>("copy_field", { id, field }),
   copyText: (text: string) => invoke<number>("copy_text", { text }),
+  /** true, wenn Remember Key danach das Login im Browser ausfüllt. */
+  openUrl: (id: string) => invoke<boolean>("open_entry_url", { id }),
   generate: (options: GenOptions) => invoke<Generated>("generate_password", { options }),
 
   syncStatus: () => invoke<SyncStatus>("sync_status"),

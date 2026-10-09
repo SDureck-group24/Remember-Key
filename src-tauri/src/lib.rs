@@ -694,6 +694,42 @@ fn copy_field(state: State<'_, AppState>, id: String, field: String) -> Result<u
     Ok(clear_after)
 }
 
+/// Öffnet die Website eines Eintrags im Standardbrowser. Die Adresse kommt aus dem
+/// Tresor, nicht aus dem Frontend; erlaubt sind nur http und https.
+///
+/// Ist die Browser-Erweiterung verbunden und ein Passwort hinterlegt, füllt Remember Key
+/// das Login danach aus und sendet es ab (siehe `agent::fill_after_open`). Gibt zurück,
+/// ob das versucht wird.
+#[tauri::command]
+fn open_entry_url(app: AppHandle, state: State<'_, AppState>, id: String) -> Result<bool> {
+    let (url, has_password) = {
+        let mut g = state.lock();
+        let e = g.vault()?.data.entries.iter().find(|e| e.id == id).ok_or(Error::NotFound)?;
+        let raw = e.url.trim();
+        if raw.is_empty() {
+            return Err(Error::Invalid("Für diesen Eintrag ist keine Website hinterlegt".into()));
+        }
+        let url = if raw.contains("://") { raw.to_string() } else { format!("https://{raw}") };
+        (url, !e.password.is_empty())
+    };
+    let parsed = url::Url::parse(&url).map_err(|_| Error::Invalid("Die Website-Adresse ist ungültig".into()))?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err(Error::Invalid("Nur http- und https-Adressen lassen sich öffnen".into()));
+    }
+    let host = parsed.host_str().unwrap_or_default().to_ascii_lowercase();
+    use tauri_plugin_opener::OpenerExt;
+    app.opener()
+        .open_url(url, None::<&str>)
+        .map_err(|e| Error::Invalid(format!("Browser konnte nicht geöffnet werden: {e}")))?;
+    // Die Erweiterung füllt nur auf https aus (http nur für localhost).
+    let fillable = parsed.scheme() == "https" || ["localhost", "127.0.0.1", "[::1]"].contains(&host.as_str());
+    let filling = has_password && fillable && !host.is_empty() && agent::can_fill_after_open();
+    if filling {
+        agent::fill_after_open(app.clone(), id, host);
+    }
+    Ok(filling)
+}
+
 /// Kopiert einen frei übergebenen Wert (z. B. frisch generiertes Passwort).
 #[tauri::command]
 fn copy_text(state: State<'_, AppState>, text: String) -> Result<u32> {
@@ -931,6 +967,7 @@ pub fn run() {
             totp_code,
             copy_field,
             copy_text,
+            open_entry_url,
             generate_password,
             get_settings,
             set_settings,

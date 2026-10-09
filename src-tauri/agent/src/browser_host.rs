@@ -47,6 +47,7 @@ fn main() {
     // Erste Nachricht der Erweiterung: {"type":"hello","browser":"…"}
     let Ok(hello) = read_native(&mut input) else { return };
     let browser: String = hello["browser"].as_str().unwrap_or("Browser").chars().take(40).collect();
+    let password_only = hello["features"].as_array().is_some_and(|f| f.iter().any(|x| x == "passwordOnly"));
 
     let mut pipe = match rk_agent::pipe::connect_to_app() {
         Ok(p) => p,
@@ -55,7 +56,7 @@ fn main() {
             return;
         }
     };
-    if write_message(&mut pipe, &Request::RegisterBrowser { browser }).is_err() {
+    if write_message(&mut pipe, &Request::RegisterBrowser { browser, password_only }).is_err() {
         return;
     }
     let _ = write_native(&mut io::stdout().lock(), &json!({ "type": "connected" }));

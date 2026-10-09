@@ -41,7 +41,13 @@ pub enum Request {
     FillLogin(FillLogin),
     /// Der Native-Messaging-Host meldet einen Browser an und hält die Verbindung offen;
     /// darüber schickt die App anschließend `BrowserCommand`s.
-    RegisterBrowser { browser: String },
+    RegisterBrowser {
+        browser: String,
+        /// Die Erweiterung kennt `password_only`. Ältere Versionen füllen auch ohne
+        /// Passwortfeld aus und bekommen deshalb keine automatischen Logins.
+        #[serde(default)]
+        password_only: bool,
+    },
     /// Ergebnis der Erweiterung zu einem `BrowserCommand`.
     BrowserResult { id: u64, result: Response },
 }
@@ -73,6 +79,10 @@ pub enum BrowserCommand {
         /// setzt ihn nur ein, wenn die Seite nach einem Code fragt.
         #[serde(default)]
         otp: Option<String>,
+        /// Nur ausfüllen, wenn die Seite ein Passwortfeld hat (Aufrufen aus der App:
+        /// sonst könnte auf einer schon angemeldeten Seite ein beliebiges Feld getroffen werden).
+        #[serde(default)]
+        password_only: bool,
     },
 }
 
@@ -475,10 +485,12 @@ mod tests {
             username: "u".into(),
             password: "p".into(),
             otp: None,
+            password_only: true,
         };
         let json = serde_json::to_value(&cmd).unwrap();
         assert_eq!(json["type"], "fill");
         assert_eq!(json["hostHint"], serde_json::Value::Null);
+        assert_eq!(json["passwordOnly"], true);
         let req: Request =
             serde_json::from_str(r#"{"op":"browser_result","id":7,"result":{"Err":"kein Tab"}}"#).unwrap();
         assert!(matches!(req, Request::BrowserResult { id: 7, result: Err(_) }));

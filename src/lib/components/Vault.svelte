@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { listen } from "@tauri-apps/api/event";
   import { api, subtree, type CopyField } from "$lib/api";
   import { store, ROOT_DROP } from "$lib/store.svelte";
   import EntryView from "./EntryView.svelte";
@@ -47,6 +48,14 @@
     try {
       const secs = await api.copyField(id, field);
       store.notify(`${label} kopiert. Wird in ${secs} s aus der Zwischenablage gelöscht.`);
+    } catch (e) {
+      store.fail(e);
+    }
+  }
+
+  async function visit(id: string) {
+    try {
+      if (await api.openUrl(id)) store.notify("Website geöffnet. Das Login wird ausgefüllt, sobald die Seite geladen ist.");
     } catch (e) {
       store.fail(e);
     }
@@ -114,7 +123,15 @@
 
   onMount(() => {
     store.load();
-    return () => store.reset();
+    const unlisten = listen<{ ok: boolean; title?: string; submitted?: boolean; message?: string }>("visit-fill", (e) => {
+      const r = e.payload;
+      if (r.ok) store.notify(r.submitted ? `Login für „${r.title}“ ausgefüllt und abgesendet` : `Login für „${r.title}“ ausgefüllt`);
+      else store.notify(`Login nicht ausgefüllt: ${r.message}`);
+    });
+    return () => {
+      store.reset();
+      unlisten.then((f) => f());
+    };
   });
 </script>
 
@@ -266,6 +283,7 @@
                 showFolder={store.current === null || !!query.trim()}
                 onopen={() => openEntry(e.id)}
                 oncopy={(field, label) => copy(e.id, field, label)}
+                onvisit={() => visit(e.id)}
               />
             {/each}
           </div>

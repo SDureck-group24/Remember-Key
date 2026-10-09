@@ -1,4 +1,5 @@
 // Phosphor-Icons (regular), wie vom Nocturne-Designsystem vorgegeben. Nur benötigte Icons importieren.
+import arrowSquareOut from "@phosphor-icons/core/assets/regular/arrow-square-out.svg?raw";
 import arrowLeft from "@phosphor-icons/core/assets/regular/arrow-left.svg?raw";
 import caretDown from "@phosphor-icons/core/assets/regular/caret-down.svg?raw";
 import caretRight from "@phosphor-icons/core/assets/regular/caret-right.svg?raw";
@@ -44,6 +45,7 @@ export const icons = {
   "google-drive-logo": googleDriveLogo,
   "link-break": linkBreak,
   "arrow-left": arrowLeft,
+  "arrow-square-out": arrowSquareOut,
   "caret-down": caretDown,
   "caret-right": caretRight,
   "folder-open": folderOpen,

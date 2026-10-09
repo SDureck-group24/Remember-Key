@@ -134,6 +134,52 @@ pub fn browsers() -> Vec<String> {
     browser::connected()
 }
 
+/// Mindestens eine verbundene Erweiterung kann automatische Logins sicher ausfüllen.
+pub fn can_fill_after_open() -> bool {
+    browser::supports_password_only()
+}
+
+/// Ereignis an das Frontend mit dem Ergebnis von [`fill_after_open`].
+const VISIT_FILL_EVENT: &str = "visit-fill";
+
+/// Füllt nach „Website aufrufen“ das Login im Browser aus, sobald die Seite geladen ist.
+///
+/// Kein Bestätigungsdialog: Der Nutzer hat selbst in der App geklickt. Ausgefüllt wird nur
+/// auf genau dem Host der Website und nur, wenn die Seite ein Passwortfeld hat. Die
+/// Erweiterung bekommt die Zugangsdaten mehrmals angeboten, bis der Tab geladen ist.
+pub fn fill_after_open(app: AppHandle, entry_id: String, host: String) {
+    const ATTEMPTS: u32 = 10;
+    std::thread::spawn(move || {
+        let mut last = String::new();
+        for attempt in 0..ATTEMPTS {
+            std::thread::sleep(std::time::Duration::from_millis(if attempt == 0 { 1500 } else { 1000 }));
+            // Bei jedem Versuch neu lesen: Der Tresor kann inzwischen gesperrt sein.
+            let creds = {
+                let state = app.state::<AppState>();
+                let g = state.lock();
+                // Nicht `available`: Das gilt unabhängig vom KI-Zugriff, nur entsperrt muss der Tresor sein.
+                g.vault.as_ref().and_then(|v| v.data.entries.iter().find(|e| e.id == entry_id)).map(|e| {
+                    (zeroize::Zeroizing::new(e.username.clone()), zeroize::Zeroizing::new(e.password.clone()), e.title.clone())
+                })
+            };
+            let Some((username, password, title)) = creds else {
+                return;
+            };
+            match browser::fill(&[host.clone()], Some(&host), &username, &password, None, true) {
+                Ok(v) => {
+                    let _ = app.emit(
+                        VISIT_FILL_EVENT,
+                        json!({ "ok": true, "title": title, "submitted": v["submitted"].as_bool().unwrap_or(false) }),
+                    );
+                    return;
+                }
+                Err(e) => last = e,
+            }
+        }
+        let _ = app.emit(VISIT_FILL_EVENT, json!({ "ok": false, "message": last }));
+    });
+}
+
 /// Registriert den Native-Messaging-Host (nach dem Einschalten des KI-Zugriffs).
 pub fn register_browser_host() {
     if let Some(dir) = DATA_DIR.get() {
@@ -497,7 +543,7 @@ fn fill_login(app: &AppHandle, req: &FillLogin) -> Response {
             return Err(msg);
         }
     };
-    let result = browser::fill(&hosts, hint.as_deref(), &username, &password, otp.as_deref().map(|s| s.as_str()));
+    let result = browser::fill(&hosts, hint.as_deref(), &username, &password, otp.as_deref().map(|s| s.as_str()), false);
     drop((username, password, otp));
     match result {
         Ok(v) => {
@@ -614,10 +660,10 @@ fn serve(app: &AppHandle, mut pipe: rk_agent::pipe::Pipe, app_dir: &Path) {
     };
     let Ok(req) = rk_agent::read_message::<Request>(&mut pipe) else { return };
     let resp = match (role, req) {
-        (Client::Browser, Request::RegisterBrowser { browser }) => {
+        (Client::Browser, Request::RegisterBrowser { browser, password_only }) => {
             log(app, "browser", format!("{browser} verbunden"), Outcome::Ok);
             // Verbindung bleibt offen und gehört ab jetzt `browser`; keine Antwort.
-            browser::register(browser, pipe);
+            browser::register(browser, password_only, pipe);
             return;
         }
         (Client::Browser, Request::BrowserResult { id, result }) => {

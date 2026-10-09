@@ -24,6 +24,8 @@ type Pipe = rk_agent::pipe::Pipe;
 #[cfg(windows)]
 struct Conn {
     browser: String,
+    /// Kennt `password_only` (siehe `Request::RegisterBrowser`).
+    password_only: bool,
     /// Eigener Mutex, damit ein langsamer Host nicht alle anderen blockiert.
     pipe: Arc<Mutex<Pipe>>,
 }
@@ -47,8 +49,19 @@ fn state() -> std::sync::MutexGuard<'static, State> {
 }
 
 #[cfg(windows)]
-pub fn register(browser: String, pipe: Pipe) {
-    state().conns.push(Conn { browser, pipe: Arc::new(Mutex::new(pipe)) });
+pub fn register(browser: String, password_only: bool, pipe: Pipe) {
+    state().conns.push(Conn { browser, password_only, pipe: Arc::new(Mutex::new(pipe)) });
+}
+
+/// Ob eine verbundene Erweiterung `password_only` kennt.
+pub fn supports_password_only() -> bool {
+    #[cfg(windows)]
+    {
+        connected();
+        state().conns.iter().any(|c| c.password_only)
+    }
+    #[cfg(not(windows))]
+    false
 }
 
 /// Namen der verbundenen Browser; getrennte Verbindungen werden dabei entfernt.
@@ -80,6 +93,7 @@ pub fn fill(
     username: &str,
     password: &str,
     otp: Option<&str>,
+    password_only: bool,
 ) -> Result<Value, String> {
     let (tx, rx) = mpsc::channel();
     let id = {
@@ -89,7 +103,7 @@ pub fn fill(
         s.waiting.push((id, tx));
         id
     };
-    let result = send_and_wait(id, hosts, host_hint, username, password, otp, &rx);
+    let result = send_and_wait(id, hosts, host_hint, username, password, otp, password_only, &rx);
     state().waiting.retain(|(w, _)| *w != id);
     result
 }
@@ -102,6 +116,7 @@ fn send_and_wait(
     username: &str,
     password: &str,
     otp: Option<&str>,
+    password_only: bool,
     rx: &mpsc::Receiver<Response>,
 ) -> Result<Value, String> {
     let cmd = BrowserCommand::Fill {
@@ -111,8 +126,11 @@ fn send_and_wait(
         username: username.to_string(),
         password: password.to_string(),
         otp: otp.map(str::to_string),
+        password_only,
     };
-    let targets: Vec<Arc<Mutex<Pipe>>> = state().conns.iter().map(|c| c.pipe.clone()).collect();
+    // `password_only` nur an Erweiterungen, die es auch beachten.
+    let targets: Vec<Arc<Mutex<Pipe>>> =
+        state().conns.iter().filter(|c| !password_only || c.password_only).map(|c| c.pipe.clone()).collect();
     let mut sent = 0;
     for pipe in &targets {
         let ok = pipe.lock().is_ok_and(|mut p| rk_agent::write_message(&mut *p, &cmd).is_ok());
@@ -153,6 +171,7 @@ fn send_and_wait(
     _username: &str,
     _password: &str,
     _otp: Option<&str>,
+    _password_only: bool,
     _rx: &mpsc::Receiver<Response>,
 ) -> Result<Value, String> {
     Err(NOT_CONNECTED.into())
@@ -165,7 +184,7 @@ mod tests {
     #[test]
     fn fill_without_browser_fails_fast() {
         let started = Instant::now();
-        let r = fill(&["x.de".into()], None, "u", "p", None);
+        let r = fill(&["x.de".into()], None, "u", "p", None, false);
         assert_eq!(r.unwrap_err(), NOT_CONNECTED);
         assert!(started.elapsed() < Duration::from_secs(1));
         assert!(state().waiting.is_empty());
