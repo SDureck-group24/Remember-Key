@@ -9,7 +9,7 @@
 <div class="gate">
   <div class="column">
     <div class="brand">
-      <Icon name="key" size={22} />
+      <Icon name="logo" size={24} />
       <span>Remember Key</span>
     </div>
     <h2>{title}</h2>

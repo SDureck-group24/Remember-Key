@@ -36,7 +36,14 @@ import trash from "@phosphor-icons/core/assets/regular/trash.svg?raw";
 import warningCircle from "@phosphor-icons/core/assets/regular/warning-circle.svg?raw";
 import x from "@phosphor-icons/core/assets/regular/x.svg?raw";
 
+// Remember-Key-Logo ohne Kachel (Quelle: src-tauri/icons/app-icon.svg), in der Textfarbe gezeichnet.
+const logo =
+  '<svg viewBox="4 4 56 56" fill="none"><circle cx="32" cy="22" r="11" stroke="currentColor" stroke-width="6"/>' +
+  '<path d="M32 33v21M32 44h8M32 53h6" stroke="currentColor" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>' +
+  '<circle cx="32" cy="22" r="3.5" fill="var(--color-text)"/></svg>';
+
 export const icons = {
+  logo,
   "cloud": cloud,
   "cloud-arrow-down": cloudArrowDown,
   "cloud-check": cloudCheck,

@@ -140,7 +140,7 @@
 <div class="app">
   <aside>
     <div class="brand">
-      <Icon name="key" size={18} />
+      <Icon name="logo" size={20} />
       <span>Remember Key</span>
     </div>
 
