@@ -1,19 +1,26 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { listen } from "@tauri-apps/api/event";
-  import { api, type SyncStatus } from "$lib/api";
+  import { api, errorText, type SyncStatus } from "$lib/api";
+  import Icon from "$lib/components/Icon.svelte";
   import { store } from "$lib/store.svelte";
   import Setup from "$lib/components/Setup.svelte";
   import Unlock from "$lib/components/Unlock.svelte";
   import Vault from "$lib/components/Vault.svelte";
   import AgentApproval from "$lib/components/AgentApproval.svelte";
 
-  let view = $state<"loading" | "setup" | "unlock" | "vault">("loading");
+  let view = $state<"loading" | "error" | "setup" | "unlock" | "vault">("loading");
+  let startError = $state("");
   let lockReason = $state("");
 
   async function refresh() {
-    const s = await api.status();
-    view = !s.exists ? "setup" : s.unlocked ? "vault" : "unlock";
+    try {
+      const s = await api.status();
+      view = !s.exists ? "setup" : s.unlocked ? "vault" : "unlock";
+    } catch (e) {
+      startError = errorText(e);
+      view = "error";
+    }
   }
 
   async function lockNow() {
@@ -44,7 +51,15 @@
   });
 </script>
 
-{#if view === "setup"}
+{#if view === "error"}
+  <div class="start" role="alert">
+    <h4>Remember Key konnte den Tresor nicht prüfen</h4>
+    <p class="error"><Icon name="warning-circle" size={16} /> {startError}</p>
+    <button class="btn btn-secondary" onclick={() => ((view = "loading"), refresh())}>
+      <Icon name="arrows-clockwise" size={15} /> Erneut versuchen
+    </button>
+  </div>
+{:else if view === "setup"}
   <Setup ondone={refresh} />
 {:else if view === "unlock"}
   <Unlock
@@ -58,3 +73,11 @@
   <Vault onlock={lockNow} />
   <AgentApproval />
 {/if}
+
+<style>
+  .start {
+    max-width: 440px;
+    margin: 20vh auto 0;
+    padding-inline: var(--space-8);
+  }
+</style>

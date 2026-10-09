@@ -30,6 +30,7 @@
     hide();
     confirmDelete = false;
     error = "";
+    detail = null;
     api
       .get(current)
       .then((d) => {
@@ -89,7 +90,9 @@
 
 {#if error}<p class="error"><Icon name="warning-circle" size={16} /> {error}</p>{/if}
 
-{#if detail}
+{#if !detail && !error}
+  <p class="text-muted loading" role="status">Eintrag wird geladen …</p>
+{:else if detail}
   <article class="view">
     <div class="row head">
       <h3 class="grow">{detail.title}</h3>
@@ -177,7 +180,7 @@
         <dt>KI-Zugriff</dt>
         <dd>
           <span class="value grow">
-            <Icon name="robot" size={14} /> Freigegeben für {detail.agent.hosts.join(", ")}
+            Freigegeben für {detail.agent.hosts.join(", ")}
             {#if detail.agent.auth.length}
               · Einsetzen als {detail.agent.auth.map(authLabel).join(", ")}
             {:else if !detail.agent.fillLogin}
@@ -244,6 +247,9 @@
   .folder {
     font-size: 13px;
     padding-block: 6px;
+  }
+  .loading {
+    font-size: 13px;
   }
   .meta {
     margin-top: var(--space-8);

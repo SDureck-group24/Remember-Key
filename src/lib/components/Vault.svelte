@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { api, errorText, subtree, type CopyField } from "$lib/api";
+  import { api, subtree, type CopyField } from "$lib/api";
   import { store, ROOT_DROP } from "$lib/store.svelte";
   import EntryView from "./EntryView.svelte";
   import EntryForm from "./EntryForm.svelte";
@@ -48,7 +48,7 @@
       const secs = await api.copyField(id, field);
       store.notify(`${label} kopiert. Wird in ${secs} s aus der Zwischenablage gelöscht.`);
     } catch (e) {
-      store.notify(errorText(e));
+      store.fail(e);
     }
   }
 
@@ -248,7 +248,17 @@
           </div>
         {/if}
 
-        {#if visible.length}
+        {#if !store.loaded}
+          <p class="loading text-muted" role="status">Einträge werden geladen …</p>
+        {:else if store.loadError}
+          <div class="empty" role="alert">
+            <h4>Einträge konnten nicht geladen werden</h4>
+            <p class="error"><Icon name="warning-circle" size={16} /> {store.loadError}</p>
+            <button class="btn btn-secondary" onclick={() => store.load()}>
+              <Icon name="arrows-clockwise" size={15} /> Erneut laden
+            </button>
+          </div>
+        {:else if visible.length}
           <div class="grid" role="list">
             {#each visible as e (e.id)}
               <EntryTile
@@ -266,7 +276,7 @@
               <p class="text-muted">Für „{query.trim()}“ wurde nichts gefunden.</p>
             {:else if store.current}
               <h4>Dieser Ordner ist leer</h4>
-              <p class="text-muted">Ziehen Sie Kacheln hierher in der Seitenleiste oder legen Sie einen neuen Eintrag an.</p>
+              <p class="text-muted">Ziehen Sie Einträge auf diesen Ordner in der Seitenleiste oder legen Sie hier einen neuen Eintrag an.</p>
             {:else}
               <h4>Ihr Tresor ist leer</h4>
               <p class="text-muted">Legen Sie mit „Neuer Eintrag“ Ihren ersten Login an.</p>
@@ -311,8 +321,8 @@
 {/if}
 
 {#if store.toast}
-  <div class="toast elev-md" role="status">
-    <Icon name="check" size={15} />
+  <div class="toast elev-md" class:failed={store.toastError} role={store.toastError ? "alert" : "status"}>
+    <Icon name={store.toastError ? "warning-circle" : "check"} size={15} />
     {store.toast}
   </div>
 {/if}
@@ -508,7 +518,7 @@
     cursor: pointer;
   }
   .folder-tile :global(.icon) {
-    color: var(--color-accent);
+    color: var(--color-text-muted);
   }
   .folder-tile:hover {
     background: color-mix(in srgb, var(--color-text) 5%, transparent);
@@ -563,5 +573,11 @@
   }
   .toast :global(.icon) {
     color: var(--color-accent);
+  }
+  .toast.failed :global(.icon) {
+    color: var(--color-danger);
+  }
+  .loading {
+    font-size: 13px;
   }
 </style>

@@ -25,6 +25,8 @@
     align-items: center;
     justify-content: center;
     padding-inline: var(--space-8);
+    /* Nocturne: Tiefe per weichem Verlauf statt flacher Fläche. Nur auf Anlegen/Entsperren,
+       aus der tiefsten Akzentstufe, damit der Sperrbildschirm sich vom Tresor unterscheidet. */
     background:
       radial-gradient(70% 60% at 50% 100%, color-mix(in srgb, var(--color-accent-900) 70%, transparent), transparent 60%),
       var(--color-bg);

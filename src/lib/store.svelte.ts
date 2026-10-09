@@ -25,6 +25,10 @@ class VaultStore {
   confirmDelete = $state<Folder | null>(null);
   dragOver = $state<string | null>(null);
   toast = $state("");
+  toastError = $state(false);
+  /** Erst nach dem ersten Laden true; bis dahin zeigt die Ansicht keinen Leerzustand. */
+  loaded = $state(false);
+  loadError = $state("");
   sync = $state<SyncStatus | null>(null);
   /** Erhöht sich bei jedem Ordnerwechsel, damit die Ansicht Details schließen kann. */
   navigation = $state(0);
@@ -36,8 +40,11 @@ class VaultStore {
       this.entries = entries;
       this.folders = folders;
       if (this.current && !folders.some((f) => f.id === this.current)) this.current = null;
+      this.loadError = "";
     } catch (e) {
-      this.notify(errorText(e));
+      this.loadError = errorText(e);
+    } finally {
+      this.loaded = true;
     }
   }
 
@@ -47,10 +54,24 @@ class VaultStore {
     this.current = null;
     this.editing = null;
     this.confirmDelete = null;
+    this.loaded = false;
+    this.loadError = "";
   }
 
   notify(msg: string) {
     this.toast = msg;
+    this.toastError = false;
+    this.#showToast();
+  }
+
+  /** Fehlermeldung im selben Toast, aber mit Warnsymbol und Fehlerton statt Häkchen. */
+  fail(e: unknown) {
+    this.toast = errorText(e);
+    this.toastError = true;
+    this.#showToast();
+  }
+
+  #showToast() {
     clearTimeout(this.#toastTimer);
     this.#toastTimer = setTimeout(() => (this.toast = ""), 3500);
   }
@@ -114,7 +135,7 @@ class VaultStore {
         await this.load();
       }
     } catch (e) {
-      this.notify(errorText(e));
+      this.fail(e);
     }
   }
 
@@ -126,7 +147,7 @@ class VaultStore {
       await this.load();
       this.notify(`Ordner „${f.name}“ gelöscht`);
     } catch (e) {
-      this.notify(errorText(e));
+      this.fail(e);
     }
   }
 
@@ -171,7 +192,7 @@ class VaultStore {
       }
       await this.load();
     } catch (err) {
-      this.notify(errorText(err));
+      this.fail(err);
     }
   }
 }

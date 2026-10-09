@@ -75,7 +75,6 @@
   <div class="dialog-backdrop">
     <div class="dialog" role="alertdialog" aria-modal="true" aria-labelledby="appr-title" aria-describedby="appr-body">
       <div class="row">
-        <Icon name="robot" size={20} />
         <div class="dialog-title grow" id="appr-title">KI-Anfrage bestätigen</div>
         <span class="countdown" title="Wird danach automatisch abgelehnt">{remaining} s</span>
       </div>
@@ -87,7 +86,7 @@
             <dt>Aktion</dt>
             <dd>
               Login im Browser ausfüllen und absenden{current.auth.includes("totp")
-                ? " – fragt die Seite nach einem 2FA-Code, wird der aktuelle Code eingesetzt"
+                ? ". Fragt die Seite nach einem 2FA-Code, setzt Remember Key den aktuellen Code ein."
                 : ""}
             </dd>
             <dt>Seite</dt>
@@ -95,8 +94,8 @@
           </dl>
           <p class="hint">
             Die Remember-Key-Erweiterung füllt nur auf dieser Seite aus. Die KI sieht das Passwort nicht. Steuert sie den
-            Browser, könnte sie das Feld vor dem Absenden aber technisch auslesen – erlaube das nur, wenn du die Anfrage
-            erwartest.
+            Browser, könnte sie das Feld vor dem Absenden aber technisch auslesen. Erlauben Sie das nur, wenn Sie die Anfrage
+            erwarten.
           </p>
         {:else}
           <dl>
@@ -104,7 +103,7 @@
             <dd class="mono">{current.method} {current.host}{current.path}</dd>
             {#if current.session === "use"}
               <dt>Anmeldung</dt>
-              <dd>über die bestehende Sitzung (Cookies aus dem Login) – kein Passwort</dd>
+              <dd>über die bestehende Sitzung (Cookies aus dem Login), ohne Passwort</dd>
             {:else}
               <dt>Passwort</dt>
               <dd>wird {authText(current.auth)} eingesetzt</dd>

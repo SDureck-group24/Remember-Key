@@ -1,6 +1,6 @@
 <!-- Kleiner Statusknopf in der Kopfzeile; Klick gleicht sofort ab. -->
 <script lang="ts">
-  import { api, errorText } from "$lib/api";
+  import { api } from "$lib/api";
   import { store } from "$lib/store.svelte";
   import Icon from "./Icon.svelte";
   import type { IconName } from "$lib/icons";
@@ -19,7 +19,7 @@
     try {
       await api.syncNow();
     } catch (e) {
-      store.notify(errorText(e));
+      store.fail(e);
     }
   }
 </script>
@@ -39,7 +39,6 @@
 {/if}
 
 <style>
-  .sync[data-state="idle"],
   .sync[data-state="syncing"] {
     color: var(--color-accent);
   }
@@ -47,6 +46,7 @@
   .sync[data-state="needs-password"] {
     color: var(--color-danger);
   }
+  .sync[data-state="idle"],
   .sync[data-state="offline"] {
     color: var(--color-text-muted);
   }
