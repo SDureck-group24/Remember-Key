@@ -4,7 +4,7 @@
   import { store, ROOT_DROP } from "$lib/store.svelte";
   import EntryView from "./EntryView.svelte";
   import EntryForm from "./EntryForm.svelte";
-  import EntryTile from "./EntryTile.svelte";
+  import EntryRow from "./EntryRow.svelte";
   import FolderTree from "./FolderTree.svelte";
   import Generator from "./Generator.svelte";
   import SettingsDialog from "./SettingsDialog.svelte";
@@ -176,8 +176,8 @@
       <button class="btn btn-primary" onclick={startNew} title="Neuer Eintrag (Strg+N)">
         <Icon name="plus" size={16} /> Neuer Eintrag
       </button>
-      <button class="btn btn-secondary" onclick={() => (showGenerator = true)}>
-        <Icon name="password" size={16} /> Generator
+      <button class="btn btn-secondary gen" onclick={() => (showGenerator = true)} title="Passwort-Generator" aria-label="Passwort-Generator">
+        <Icon name="password" size={16} /> <span class="gen-label">Generator</span>
       </button>
       <SyncIndicator />
       <button class="btn btn-icon btn-secondary" onclick={() => (showSettings = true)} title="Einstellungen" aria-label="Einstellungen">
@@ -259,9 +259,9 @@
             </button>
           </div>
         {:else if visible.length}
-          <div class="grid" role="list">
+          <div class="list" role="list" aria-label="Einträge">
             {#each visible as e (e.id)}
-              <EntryTile
+              <EntryRow
                 entry={e}
                 showFolder={store.current === null || !!query.trim()}
                 onopen={() => openEntry(e.id)}
@@ -435,9 +435,14 @@
     padding: var(--space-4) var(--space-8);
     gap: var(--space-2);
   }
+  .nav .btn {
+    flex: none;
+    white-space: nowrap;
+  }
   .search {
     position: relative;
-    width: min(340px, 40%);
+    flex: 0 1 340px;
+    min-width: 160px;
   }
   .search .input {
     padding-left: 32px;
@@ -497,11 +502,15 @@
   }
   .grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
-    gap: var(--space-4);
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: var(--space-3);
   }
   .grid.folders {
-    margin-bottom: var(--space-6);
+    margin-bottom: var(--space-8);
+  }
+  .list {
+    container: entries / inline-size;
+    margin-inline: calc(var(--space-3) * -1);
   }
   .folder-tile {
     display: flex;
@@ -534,7 +543,7 @@
   }
   .empty {
     max-width: 440px;
-    margin: 10vh auto 0;
+    margin: 8vh 0 0;
   }
   .keys {
     display: grid;
@@ -579,5 +588,16 @@
   }
   .loading {
     font-size: 13px;
+  }
+  /* Bei schmalem Fenster bleibt vom Generator-Knopf nur das Symbol. */
+  @media (max-width: 900px) {
+    .gen-label {
+      display: none;
+    }
+    .gen {
+      width: 36px;
+      height: 36px;
+      padding: 0;
+    }
   }
 </style>
