@@ -123,7 +123,7 @@ fn handle(app: &AppHandle, req: Request) -> Response {
         Request::HttpRequest(req) => http_request(app, &req),
         Request::FillLogin(req) => fill_login(app, &req),
         // Nur vom Browser-Host, siehe `serve`.
-        Request::RegisterBrowser { .. } | Request::BrowserResult { .. } => {
+        Request::RegisterBrowser { .. } | Request::BrowserResult { .. } | Request::BrowserLogin { .. } => {
             Err("Anfrage für diesen Client nicht erlaubt".into())
         }
     }
@@ -178,6 +178,62 @@ pub fn fill_after_open(app: AppHandle, entry_id: String, host: String) {
         }
         let _ = app.emit(VISIT_FILL_EVENT, json!({ "ok": false, "message": last }));
     });
+}
+
+/// Host einer Eintrags-Website ohne führendes `www.`; ohne Schema gilt https.
+fn site_host(url: &str) -> Option<String> {
+    let raw = url.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    let full = if raw.contains("://") { raw.to_string() } else { format!("https://{raw}") };
+    let host = url::Url::parse(&full).ok()?.host_str()?.to_ascii_lowercase();
+    Some(host.trim_end_matches('.').trim_start_matches("www.").to_string())
+}
+
+/// Anmelde-Knopf der Browser-Erweiterung: Der Nutzer hat auf einer Seite mit `host` geklickt.
+///
+/// Kein Bestätigungsdialog, solange der Tresor entsperrt ist. Ist er gesperrt, wird zuerst
+/// mit Windows Hello entsperrt; geht das nicht, holt sich die App für das Master-Passwort
+/// nach vorn. Passend sind nur Einträge, deren Website genau diesen Host hat (`www.` egal).
+fn browser_login(app: &AppHandle, host: &str, entry_id: Option<&str>) -> Response {
+    let page = host.trim().trim_end_matches('.').to_ascii_lowercase();
+    let page = page.trim_start_matches("www.");
+    if page.is_empty() {
+        return Err("Ungültige Seite".into());
+    }
+    if app.state::<AppState>().lock().vault.is_none() {
+        if crate::hello_unlock_usable(app) {
+            crate::unlock_with_hello(app).map_err(|e| format!("Nicht entsperrt: {e}"))?;
+        } else {
+            approval::bring_to_front(app);
+            return Err("Remember Key ist gesperrt. Bitte in der App entsperren und dann erneut klicken.".into());
+        }
+    }
+    let state = app.state::<AppState>();
+    let g = state.lock();
+    let v = g.vault.as_ref().ok_or("Remember Key ist gesperrt")?;
+    let matches: Vec<_> =
+        v.data.entries.iter().filter(|e| site_host(&e.url).as_deref() == Some(page)).collect();
+    if matches.is_empty() {
+        return Err(format!("Kein Eintrag für {page} in Remember Key"));
+    }
+    let chosen = match entry_id {
+        Some(id) => matches.iter().find(|e| e.id == id).ok_or("Eintrag passt nicht zu dieser Seite")?,
+        None if matches.len() == 1 => &matches[0],
+        None => {
+            let mut choices: Vec<_> = matches
+                .iter()
+                .map(|e| json!({ "id": e.id, "title": e.title, "username": e.username }))
+                .collect();
+            choices.sort_by_key(|c| c["title"].as_str().unwrap_or_default().to_lowercase());
+            return Ok(json!({ "choices": choices }));
+        }
+    };
+    if chosen.password.is_empty() {
+        return Err(format!("Für „{}“ ist kein Passwort hinterlegt", chosen.title));
+    }
+    Ok(json!({ "username": chosen.username, "password": chosen.password }))
 }
 
 /// Registriert den Native-Messaging-Host (nach dem Einschalten des KI-Zugriffs).
@@ -666,6 +722,7 @@ fn serve(app: &AppHandle, mut pipe: rk_agent::pipe::Pipe, app_dir: &Path) {
             browser::register(browser, password_only, pipe);
             return;
         }
+        (Client::Browser, Request::BrowserLogin { host, entry_id }) => browser_login(app, &host, entry_id.as_deref()),
         (Client::Browser, Request::BrowserResult { id, result }) => {
             browser::deliver(id, result);
             Ok(serde_json::Value::Null)
@@ -688,6 +745,16 @@ pub fn spawn(_app: AppHandle, dir: &Path) {
 mod tests {
     use super::*;
     use crate::vault::{AgentPolicy, Entry};
+
+    #[test]
+    fn site_host_matches_like_the_login_button() {
+        assert_eq!(site_host("https://www.GitHub.com/login").as_deref(), Some("github.com"));
+        assert_eq!(site_host("mail.example.com").as_deref(), Some("mail.example.com"));
+        assert_eq!(site_host("http://127.0.0.1:8080").as_deref(), Some("127.0.0.1"));
+        assert_eq!(site_host("  "), None);
+        // Nur der Host zählt: eine ähnliche Domain passt nicht.
+        assert_ne!(site_host("https://github.com.evil.example").as_deref(), Some("github.com"));
+    }
 
     fn entry(id: &str, title: &str, agent: Option<AgentPolicy>) -> Entry {
         Entry {

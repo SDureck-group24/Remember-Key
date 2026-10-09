@@ -77,6 +77,28 @@ fn main() {
     // Erweiterung → App
     loop {
         let Ok(msg) = read_native(&mut input) else { exit(0) };
+        if msg["type"] == "login" {
+            // Eigener Thread: Das Entsperren mit Windows Hello kann dauern.
+            thread::spawn(move || {
+                let req_id = msg["reqId"].clone();
+                let req = Request::BrowserLogin {
+                    host: msg["host"].as_str().unwrap_or_default().chars().take(253).collect(),
+                    entry_id: msg["entryId"].as_str().map(|s| s.chars().take(64).collect()),
+                };
+                let result: Response = match rk_agent::pipe::connect_to_app() {
+                    Ok(mut conn) => write_message(&mut conn, &req)
+                        .map_err(|e| e.to_string())
+                        .and_then(|_| read_message::<Response>(&mut conn).map_err(|e| e.to_string()))
+                        .unwrap_or_else(|e| Err(format!("Keine Antwort von Remember Key: {e}"))),
+                    Err(message) => Err(message),
+                };
+                let _ = write_native(
+                    &mut io::stdout().lock(),
+                    &json!({ "type": "loginResult", "reqId": req_id, "result": result }),
+                );
+            });
+            continue;
+        }
         if msg["type"] != "result" {
             continue;
         }

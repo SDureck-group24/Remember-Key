@@ -54,6 +54,40 @@
 </script>
 
 {#if info}
+  <div class="field">
+    <h5>Browser-Erweiterung</h5>
+    <p class="hint">
+      Zeigt auf Login-Seiten einen Knopf „Remember Key“ neben dem Anmelde-Button und füllt Logins für „Aufrufen“ und
+      freigegebene KI-Anfragen aus. Funktioniert auch bei ausgeschaltetem KI-Zugriff.
+    </p>
+    {#if info.browsers.length}
+      <p><span class="tag tag-accent">Verbunden</span> {info.browsers.join(", ")}</p>
+    {:else}
+      <p class="hint">Nicht verbunden. Die Erweiterung verbindet sich innerhalb von 30 s, sobald der Browser läuft.</p>
+    {/if}
+    {#if info.extensionDir}
+      <div class="row">
+        <code class="cmd grow">{info.extensionDir}</code>
+        <button type="button" class="btn btn-icon btn-sm" title="Pfad kopieren" aria-label="Pfad kopieren" onclick={() => copy(info!.extensionDir!, "Pfad kopiert")}>
+          <Icon name="copy" size={15} />
+        </button>
+      </div>
+      <ul class="steps hint">
+        <li>
+          <strong>Chrome/Edge:</strong> <span class="mono">chrome://extensions</span> öffnen, „Entwicklermodus“ einschalten,
+          „Entpackte Erweiterung laden“ und diesen Ordner wählen.
+        </li>
+        <li>
+          <strong>Zen/Firefox:</strong> <span class="mono">about:debugging#/runtime/this-firefox</span> › „Temporäres Add-on
+          laden“ › <span class="mono">manifest.json</span> aus dem Ordner. Gilt bis zum Neustart des Browsers; danach unter
+          Add-ons den Zugriff auf alle Websites erlauben.
+        </li>
+      </ul>
+    {:else}
+      <p class="error"><Icon name="warning-circle" size={16} /> Der Ordner der Erweiterung fehlt neben der App.</p>
+    {/if}
+  </div>
+
   {#if enabled}
     {#if command}
       <div class="field">
@@ -83,36 +117,6 @@
       <p class="error"><Icon name="warning-circle" size={16} /> Die MCP-Brücke (remember-key-mcp.exe) fehlt neben der App.</p>
     {/if}
 
-    <div class="field">
-      <h5>Browser-Erweiterung</h5>
-      <p class="hint">Füllt Login-Formulare für freigegebene Einträge aus.</p>
-      {#if info.browsers.length}
-        <p><span class="tag tag-accent">Verbunden</span> {info.browsers.join(", ")}</p>
-      {:else}
-        <p class="hint">Nicht verbunden. Die Erweiterung verbindet sich innerhalb von 30 s, sobald der Browser läuft.</p>
-      {/if}
-      {#if info.extensionDir}
-        <div class="row">
-          <code class="cmd grow">{info.extensionDir}</code>
-          <button type="button" class="btn btn-icon btn-sm" title="Pfad kopieren" aria-label="Pfad kopieren" onclick={() => copy(info!.extensionDir!, "Pfad kopiert")}>
-            <Icon name="copy" size={15} />
-          </button>
-        </div>
-        <ul class="steps hint">
-          <li>
-            <strong>Chrome/Edge:</strong> <span class="mono">chrome://extensions</span> öffnen, „Entwicklermodus“ einschalten,
-            „Entpackte Erweiterung laden“ und diesen Ordner wählen.
-          </li>
-          <li>
-            <strong>Zen/Firefox:</strong> <span class="mono">about:debugging#/runtime/this-firefox</span> › „Temporäres Add-on
-            laden“ › <span class="mono">manifest.json</span> aus dem Ordner. Gilt bis zum Neustart des Browsers; danach unter
-            Add-ons den Zugriff auf alle Websites erlauben.
-          </li>
-        </ul>
-      {:else}
-        <p class="error"><Icon name="warning-circle" size={16} /> Der Ordner der Erweiterung fehlt neben der App.</p>
-      {/if}
-    </div>
   {/if}
 
   <div class="field">

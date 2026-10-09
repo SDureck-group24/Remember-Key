@@ -207,7 +207,9 @@ fn timeout_for(request: &Request) -> Duration {
         // Bestätigung (60 s) und Ausfüllen in der Erweiterung (15 s), plus Reserve.
         Request::FillLogin(_) => Duration::from_secs(100),
         // Werden von der Brücke nie gesendet.
-        Request::RegisterBrowser { .. } | Request::BrowserResult { .. } => Duration::from_secs(15),
+        Request::RegisterBrowser { .. } | Request::BrowserResult { .. } | Request::BrowserLogin { .. } => {
+            Duration::from_secs(15)
+        }
     }
 }
 

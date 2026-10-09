@@ -40,6 +40,10 @@
             : "Der Tresor wurde wegen Inaktivität gesperrt.";
         view = "unlock";
       }),
+      // Entsperrt über den Anmelde-Knopf der Browser-Erweiterung (Windows Hello).
+      listen("vault-unlocked", () => {
+        if (view === "unlock") refresh();
+      }),
       listen<SyncStatus>("sync-status", (e) => (store.sync = e.payload)),
       listen("vault-changed", () => {
         if (view === "vault") store.load();

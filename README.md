@@ -71,6 +71,10 @@ Nach Änderungen am Designsystem `styles.css` neu kopieren.
   setzt die Erweiterung auf der Code-Seite den aktuellen Code ein. Für Zen/Firefox erzeugt `npm run sign:firefox` eine
   signierte, dauerhaft installierbare `.xpi` (API-Schlüssel von addons.mozilla.org als `WEB_EXT_API_KEY` und
   `WEB_EXT_API_SECRET`).
+- Anmelde-Knopf: Auf Login-Seiten setzt die Erweiterung einen Knopf „Remember Key“ neben den Anmelde-Button
+  (`extension/content.js`). Ein Klick fragt die App nach dem Eintrag, dessen Website genau den Host der Seite hat
+  (`www.` egal), füllt aus und sendet ab. Ist der Tresor gesperrt, entsperrt die App mit Windows Hello oder holt sich
+  für das Master-Passwort nach vorn. Unabhängig vom KI-Zugriff.
 - Optional: Freigaben zusätzlich mit Windows Hello bestätigen (Einstellungen → KI-Zugriff).
 - Claude Code: Regel `mcp__remember-key` in `~/.claude/settings.json` unter `permissions.allow`, sonst kann der
   Auto-Modus Aufrufe blockieren, bevor sie Remember Key erreichen.

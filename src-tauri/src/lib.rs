@@ -25,6 +25,8 @@ use generator::{GenOptions, Generated};
 use vault::{AgentPolicy, Entry, Settings, UnlockedVault};
 
 const LOCKED_EVENT: &str = "vault-locked";
+/// Entsperrt ohne Zutun des Frontends (Anmelde-Knopf der Browser-Erweiterung).
+const UNLOCKED_EVENT: &str = "vault-unlocked";
 
 struct Inner {
     path: PathBuf,
@@ -301,13 +303,11 @@ async fn unlock(app: AppHandle, state: State<'_, AppState>, password: String) ->
         v.upgrade_kdf(&password, now())?;
     }
     password_entered(&state).await;
-    let agent_enabled = v.data.settings.agent_enabled;
     let mut g = state.lock();
     g.vault = Some(v);
     g.touch();
-    if agent_enabled {
-        agent::register_browser_host();
-    }
+    // Auch ohne KI-Zugriff: Die Erweiterung füllt Logins ebenfalls für „Aufrufen“ und ihren Anmelde-Knopf aus.
+    agent::register_browser_host();
     if upgraded {
         g.persist()?;
         delete_backups(&path);
@@ -318,7 +318,14 @@ async fn unlock(app: AppHandle, state: State<'_, AppState>, password: String) ->
 
 /// Entsperrt mit Windows Hello statt Master-Passwort (innerhalb der eingestellten Dauer).
 #[tauri::command]
-async fn unlock_hello(app: AppHandle, state: State<'_, AppState>) -> Result<()> {
+async fn unlock_hello(app: AppHandle) -> Result<()> {
+    blocking(move || unlock_with_hello(&app)).await?
+}
+
+/// Wie `unlock_hello`, aber blockierend, damit auch der Anmelde-Knopf der Browser-Erweiterung
+/// entsperren kann. Meldet das Entsperren ans Frontend.
+pub(crate) fn unlock_with_hello(app: &AppHandle) -> Result<()> {
+    let state = app.state::<AppState>();
     let (wrapped, path) = {
         let mut g = state.lock();
         if !g.hello.usable() {
@@ -327,8 +334,8 @@ async fn unlock_hello(app: AppHandle, state: State<'_, AppState>) -> Result<()> 
         }
         (g.hello.wrapped.clone().unwrap_or_default(), g.path.clone())
     };
-    let hwnd = main_hwnd(&app);
-    let key = blocking(move || hello::decrypt(hwnd, "Remember Key entsperren", &wrapped)).await?.map_err(Error::Invalid)?;
+    let hwnd = main_hwnd(app);
+    let key = hello::decrypt(hwnd, "Remember Key entsperren", &wrapped).map_err(Error::Invalid)?;
     let bytes = std::fs::read(&path)?;
     let v = match UnlockedVault::open_with_key(&bytes, &key) {
         Ok(v) => v,
@@ -341,18 +348,22 @@ async fn unlock_hello(app: AppHandle, state: State<'_, AppState>) -> Result<()> 
         }
         Err(e) => return Err(e),
     };
-    let agent_enabled = v.data.settings.agent_enabled;
     let mut g = state.lock();
     if g.vault.is_none() {
         g.vault = Some(v);
     }
     g.hello.wrapped = None;
     g.touch();
-    if agent_enabled {
-        agent::register_browser_host();
-    }
+    agent::register_browser_host();
     let _ = g.sync_tx.send(sync::Msg::Now);
+    drop(g);
+    let _ = app.emit(UNLOCKED_EVENT, ());
     Ok(())
+}
+
+/// Windows Hello kann den Tresor gerade entsperren.
+pub(crate) fn hello_unlock_usable(app: &AppHandle) -> bool {
+    app.state::<AppState>().lock().hello.usable()
 }
 
 #[derive(Serialize)]

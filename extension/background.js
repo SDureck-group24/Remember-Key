@@ -34,6 +34,7 @@ async function connect() {
     p.onDisconnect.addListener(() => {
       void chrome.runtime.lastError; // App läuft nicht oder Host fehlt – später erneut versuchen
       if (port === p) port = null;
+      failLogins(NOT_RUNNING);
     });
     port = p;
     // `features`: Die App schickt automatische Logins (Aufrufen) nur an Erweiterungen mit passwordOnly.
@@ -53,6 +54,8 @@ chrome.runtime.onInstalled.addListener(connect);
 connect();
 
 async function onMessage(p, msg) {
+  if (msg?.type === "loginResult") return settleLogin(msg.reqId, msg.result);
+  if (msg?.type === "error") return failLogins(msg.message ?? NOT_RUNNING);
   if (msg?.type !== "fill") return;
   let result;
   try {
@@ -63,6 +66,71 @@ async function onMessage(p, msg) {
   try {
     p.postMessage({ type: "result", id: msg.id, result });
   } catch {}
+}
+
+// ── Anmelde-Knopf (content.js) ────────────────────────────────────────────────────────────
+
+const NOT_RUNNING = "Remember Key läuft nicht. Bitte die App starten und erneut klicken.";
+const loginWaiting = new Map();
+let nextLoginId = 1;
+
+function settleLogin(reqId, result) {
+  const w = loginWaiting.get(reqId);
+  if (!w) return;
+  loginWaiting.delete(reqId);
+  clearTimeout(w.timer);
+  w.resolve(result ?? { Err: "Ungültige Antwort von Remember Key" });
+}
+
+function failLogins(message) {
+  for (const id of [...loginWaiting.keys()]) settleLogin(id, { Err: message });
+}
+
+/** Fragt die App nach den Zugangsdaten. Wartet länger als beim Ausfüllen: ggf. Windows Hello. */
+function askApp(payload) {
+  return new Promise((resolve) => {
+    if (!port) return resolve({ Err: NOT_RUNNING });
+    const reqId = nextLoginId++;
+    const timer = setTimeout(() => settleLogin(reqId, { Err: "Remember Key hat nicht rechtzeitig geantwortet" }), 90_000);
+    loginWaiting.set(reqId, { resolve, timer });
+    try {
+      port.postMessage({ ...payload, reqId });
+    } catch {
+      settleLogin(reqId, { Err: NOT_RUNNING });
+    }
+  });
+}
+
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg?.type !== "rk-login") return;
+  login(msg, sender).then(sendResponse, (e) => sendResponse({ ok: false, error: String(e?.message ?? e) }));
+  return true; // Antwort kommt asynchron
+});
+
+async function login(msg, sender) {
+  // Host aus der Adresse des Frames, nicht aus der Nachricht: Die Seite bestimmt nicht, wofür
+  // sie Zugangsdaten bekommt.
+  if (!sender.tab?.id || !sender.url) throw new Error("Unbekannte Seite");
+  const url = new URL(sender.url);
+  const host = url.hostname.toLowerCase().replace(/\.$/, "");
+  const secure = url.protocol === "https:" || (url.protocol === "http:" && LOOPBACK.includes(host));
+  if (!secure) throw new Error("Nur auf https-Seiten");
+  if (!port) await connect();
+  const entryId = typeof msg.entryId === "string" ? msg.entryId : null;
+  const result = await askApp({ type: "login", host, entryId });
+  if ("Err" in result) throw new Error(result.Err);
+  const v = result.Ok ?? {};
+  if (Array.isArray(v.choices)) return { ok: false, choices: v.choices };
+  const target = { tabId: sender.tab.id, frameIds: [sender.frameId ?? 0] };
+  await chrome.scripting.executeScript({ target, files: ["fill.js"] });
+  const [res] = await chrome.scripting.executeScript({
+    target,
+    func: (...args) => globalThis.rkFill(...args),
+    args: [[host], v.username ?? "", v.password ?? "", null, false],
+  });
+  const r = res?.result;
+  if (!r?.ok) throw new Error(r?.error ?? "Ausfüllen fehlgeschlagen");
+  return { ok: true };
 }
 
 /** Gleiche Regel wie in der App: exakter Host oder `*.domain` für Subdomains. */
@@ -98,114 +166,13 @@ async function fill({ hosts, hostHint, username, password, otp, passwordOnly }) 
   const tab = tabs[0];
   // Aufrufen aus der App: Die App versucht es erneut, bis die Seite fertig geladen ist.
   if (passwordOnly && tab.status !== "complete") throw new Error("Die Seite lädt noch");
+  await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["fill.js"] });
   const [res] = await chrome.scripting.executeScript({
     target: { tabId: tab.id },
-    func: fillInPage,
+    func: (...args) => globalThis.rkFill(...args),
     args: [hosts, username, password, otp ?? null, !!passwordOnly],
   });
   const r = res?.result;
   if (!r?.ok) throw new Error(r?.error ?? "Ausfüllen fehlgeschlagen");
   return { host: new URL(tab.url).hostname, title: tab.title ?? "", filled: r.filled, submitted: r.submitted };
-}
-
-// Läuft in der Seite (isolierte Welt der Erweiterung). Muss in sich abgeschlossen sein.
-function fillInPage(hosts, username, password, otp, passwordOnly) {
-  const host = location.hostname.toLowerCase().replace(/\.$/, "");
-  const allowed = hosts.some((h) =>
-    h.startsWith("*.") ? host.endsWith(h.slice(1)) && host.length > h.length - 1 : h === host,
-  );
-  const loopback = ["localhost", "127.0.0.1", "[::1]"].includes(host);
-  if (!allowed) return { ok: false, error: "Die Seite passt nicht zur Freigabe" };
-  if (location.protocol !== "https:" && !(location.protocol === "http:" && loopback)) {
-    return { ok: false, error: "Nur https-Seiten (http nur für localhost)" };
-  }
-
-  const usable = (el) => {
-    if (el.disabled || el.readOnly) return false;
-    const style = getComputedStyle(el);
-    if (style.visibility === "hidden" || style.display === "none") return false;
-    return el.getClientRects().length > 0;
-  };
-  const pw = [...document.querySelectorAll('input[type="password"]')].find(usable) ?? null;
-  // Ohne Passwortfeld könnte auf einer schon angemeldeten Seite ein beliebiges Feld getroffen werden.
-  if (passwordOnly && !pw) return { ok: false, error: "Kein Login-Formular mit Passwortfeld auf der Seite" };
-  const scope = pw?.form ?? document;
-  const userFields = [
-    ...scope.querySelectorAll('input[type="email"], input[type="text"], input[type="tel"], input:not([type])'),
-  ].filter(usable);
-
-  // Mehrstufige Logins: Seite mit Code-Abfrage (2FA), wenn kein Passwortfeld da ist.
-  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
-  const set = (el, value) => {
-    el.focus();
-    setter.call(el, value);
-    el.dispatchEvent(new Event("input", { bubbles: true }));
-    el.dispatchEvent(new Event("change", { bubbles: true }));
-  };
-  const submit = (field) => {
-    const form = field.form;
-    const button = [
-      ...(form ?? document).querySelectorAll('button[type="submit"], input[type="submit"], button:not([type])'),
-    ].find(usable);
-    if (form && typeof form.requestSubmit === "function") {
-      try {
-        form.requestSubmit(button && form.contains(button) ? button : undefined);
-        return true;
-      } catch {}
-    }
-    if (button) {
-      button.click();
-      return true;
-    }
-    for (const type of ["keydown", "keypress", "keyup"]) {
-      field.dispatchEvent(new KeyboardEvent(type, { key: "Enter", code: "Enter", keyCode: 13, bubbles: true }));
-    }
-    return true;
-  };
-  if (!pw && otp) {
-    const textLike = (i) => ["text", "tel", "number"].includes(i.type);
-    const inputs = [...document.querySelectorAll("input")].filter((i) => usable(i) && textLike(i));
-    // Einzelne Kästchen je Ziffer
-    const boxes = inputs.filter((i) => i.maxLength === 1);
-    if (boxes.length >= otp.length) {
-      [...otp].forEach((digit, k) => set(boxes[k], digit));
-      return { ok: true, filled: ["otp"], submitted: submit(boxes[otp.length - 1]) };
-    }
-    const otpHint = /otp|totp|2fa|mfa|one.?time|verif|code|token|pin/i;
-    const field = inputs.find(
-      (i) =>
-        i.autocomplete === "one-time-code" ||
-        otpHint.test(`${i.name} ${i.id} ${i.placeholder ?? ""} ${i.getAttribute("aria-label") ?? ""}`),
-    );
-    if (field) {
-      set(field, otp);
-      return { ok: true, filled: ["otp"], submitted: submit(field) };
-    }
-  }
-
-  let user = null;
-  if (pw) {
-    // Das letzte Textfeld vor dem Passwortfeld.
-    user = userFields.filter((u) => u.compareDocumentPosition(pw) & Node.DOCUMENT_POSITION_FOLLOWING).pop() ?? null;
-  } else {
-    // Zweistufiger Login: erst der Benutzername.
-    const hint = /user|mail|login|name|account|konto|benutzer|ident/i;
-    user =
-      userFields.find((u) => hint.test(`${u.name} ${u.id} ${u.autocomplete} ${u.placeholder ?? ""}`)) ??
-      (userFields.length === 1 ? userFields[0] : null);
-  }
-  if (!pw && !user) return { ok: false, error: "Kein Login-Formular auf der Seite gefunden" };
-
-  const filled = [];
-  if (user && username) {
-    set(user, username);
-    filled.push("username");
-  }
-  if (pw) {
-    set(pw, password);
-    filled.push("password");
-  }
-
-  // Sofort absenden, damit das Passwort möglichst kurz im Feld steht.
-  return { ok: true, filled, submitted: submit(pw ?? user) };
 }

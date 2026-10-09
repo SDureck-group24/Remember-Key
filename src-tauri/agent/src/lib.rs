@@ -48,6 +48,13 @@ pub enum Request {
         #[serde(default)]
         password_only: bool,
     },
+    /// Anmelde-Knopf der Erweiterung: Zugangsdaten für die Seite mit diesem Host. Ohne
+    /// `entry_id` und bei mehreren passenden Einträgen antwortet die App mit einer Auswahl.
+    BrowserLogin {
+        host: String,
+        #[serde(default)]
+        entry_id: Option<String>,
+    },
     /// Ergebnis der Erweiterung zu einem `BrowserCommand`.
     BrowserResult { id: u64, result: Response },
 }

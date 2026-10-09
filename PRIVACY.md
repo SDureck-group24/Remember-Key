@@ -54,13 +54,18 @@ for updates in the background and does not send crash reports.
 
 The extension collects no data and makes no network requests of its own. It communicates only with the
 Remember Key app on your computer (native messaging). It receives username, password or 2FA code from
-the app only for a login you have just confirmed or started yourself with "Website aufrufen" in the app,
-keeps them in memory just long enough to fill in the form, and does not save them.
+the app only for a login you have just confirmed or started yourself, with "Website aufrufen" in the app
+or the "Remember Key" button on a login page. It keeps them in memory just long enough to fill in the
+form, and does not save them.
+
+To show that button, the extension looks for login forms on the pages you open. This check stays in your
+browser. Only when you click the button does it send the page's host name (for example `github.com`) to
+the app, which looks for a matching entry. The page itself cannot see whether such an entry exists.
 
 Permissions it uses:
 
-- **Access to all websites:** to fill in login forms on the websites you allow. Other pages are not read
-  or changed.
+- **Access to all websites:** to show the "Remember Key" button next to login forms and to fill in logins
+  on the websites that match your entries. Apart from the login form, pages are not read or changed.
 - **Tabs:** to find the tab whose address matches the entry.
 - **Scripting:** to fill in the form in that tab.
 - **Native messaging:** to talk to the Remember Key app.
@@ -127,14 +132,20 @@ nicht im Hintergrund nach Updates und sendet keine Absturzberichte.
 
 Die Erweiterung erhebt keine Daten und stellt selbst keine Verbindungen ins Internet her. Sie spricht nur
 mit der Remember-Key-App auf deinem Rechner (Native Messaging). Benutzername, Passwort oder 2FA-Code
-erhält sie von der App nur für einen Login, den du gerade bestätigt oder mit „Website aufrufen“ in der App
-selbst gestartet hast. Sie hält sie nur so lange im Speicher, bis das Formular ausgefüllt ist, und
-speichert sie nicht.
+erhält sie von der App nur für einen Login, den du gerade bestätigt oder selbst gestartet hast, mit
+„Website aufrufen“ in der App oder dem Knopf „Remember Key“ auf einer Login-Seite. Sie hält sie nur so
+lange im Speicher, bis das Formular ausgefüllt ist, und speichert sie nicht.
+
+Für diesen Knopf sucht die Erweiterung auf den Seiten, die du öffnest, nach Login-Formularen. Das bleibt
+in deinem Browser. Erst wenn du den Knopf anklickst, schickt sie den Hostnamen der Seite (zum Beispiel
+`github.com`) an die App, die nach einem passenden Eintrag sucht. Die Seite selbst kann nicht erkennen, ob
+es einen solchen Eintrag gibt.
 
 Verwendete Berechtigungen:
 
-- **Zugriff auf alle Websites:** um Login-Formulare auf den von dir erlaubten Websites auszufüllen. Andere
-  Seiten werden weder gelesen noch verändert.
+- **Zugriff auf alle Websites:** um den Knopf „Remember Key“ neben Login-Formularen anzuzeigen und Logins
+  auf den Websites deiner Einträge auszufüllen. Außer dem Login-Formular wird auf Seiten nichts gelesen
+  oder verändert.
 - **Tabs:** um den Tab zu finden, dessen Adresse zum Eintrag passt.
 - **Skripte:** um das Formular in diesem Tab auszufüllen.
 - **Native Messaging:** um mit der Remember-Key-App zu sprechen.

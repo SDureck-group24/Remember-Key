@@ -122,7 +122,7 @@ pub fn reset() {
     q.grants.clear();
 }
 
-fn bring_to_front(app: &AppHandle) {
+pub(crate) fn bring_to_front(app: &AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.unminimize();
         let _ = w.show();
