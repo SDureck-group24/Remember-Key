@@ -53,17 +53,11 @@
     new Date(ts * 1000).toLocaleString("de-DE", { dateStyle: "short", timeStyle: "medium" });
 </script>
 
-<p class="hint">
-  KI-Assistenten wie Claude sehen über die MCP-Brücke nur freigegebene Einträge und nur deren Titel, Benutzernamen
-  und Hosts – nie Passwörter, Notizen oder 2FA-Schlüssel. Ist es beim Eintrag erlaubt, setzt Remember Key das Passwort
-  nach deiner Bestätigung selbst in HTTPS-Anfragen ein. Freigeben lässt sich ein Eintrag beim Bearbeiten.
-</p>
-
 {#if info}
   {#if enabled}
     {#if command}
       <div class="field">
-        <span class="lbl">Einrichten in Claude Code</span>
+        <h5>Einrichten in Claude Code</h5>
         <div class="row">
           <code class="cmd grow">{command}</code>
           <button type="button" class="btn btn-icon btn-sm" title="Befehl kopieren" aria-label="Befehl kopieren" onclick={() => copy(command, "Befehl kopiert")}>
@@ -72,7 +66,7 @@
         </div>
       </div>
       <div class="field">
-        <span class="lbl">Berechtigung in Claude Code</span>
+        <h5>Berechtigung in Claude Code</h5>
         <div class="row">
           <code class="cmd grow">{PERMISSION}</code>
           <button type="button" class="btn btn-icon btn-sm" title="Regel kopieren" aria-label="Regel kopieren" onclick={() => copy(PERMISSION, "Regel kopiert")}>
@@ -82,7 +76,7 @@
         <p class="hint">
           In <span class="mono">~/.claude/settings.json</span> unter <span class="mono">permissions.allow</span> eintragen.
           Sonst kann der Auto-Modus von Claude Code Aufrufe blockieren, bevor sie Remember Key erreichen. Jede Anfrage
-          mit Passwort bestätigst du trotzdem hier.
+          mit Passwort bestätigen Sie trotzdem hier.
         </p>
       </div>
     {:else}
@@ -90,7 +84,8 @@
     {/if}
 
     <div class="field">
-      <span class="lbl">Browser-Erweiterung (Login ausfüllen)</span>
+      <h5>Browser-Erweiterung</h5>
+      <p class="hint">Füllt Login-Formulare für freigegebene Einträge aus.</p>
       {#if info.browsers.length}
         <p><span class="tag tag-accent">Verbunden</span> {info.browsers.join(", ")}</p>
       {:else}
@@ -109,8 +104,8 @@
             „Entpackte Erweiterung laden“ und diesen Ordner wählen.
           </li>
           <li>
-            <strong>Zen/Firefox:</strong> <span class="mono">about:debugging#/runtime/this-firefox</span> → „Temporäres Add-on
-            laden“ → <span class="mono">manifest.json</span> aus dem Ordner. Gilt bis zum Neustart des Browsers; danach unter
+            <strong>Zen/Firefox:</strong> <span class="mono">about:debugging#/runtime/this-firefox</span> › „Temporäres Add-on
+            laden“ › <span class="mono">manifest.json</span> aus dem Ordner. Gilt bis zum Neustart des Browsers; danach unter
             Add-ons den Zugriff auf alle Websites erlauben.
           </li>
         </ul>
@@ -121,13 +116,13 @@
   {/if}
 
   <div class="field">
-    <span class="lbl">Protokoll</span>
+    <h5>Protokoll</h5>
     {#if info.log.length}
       <ul class="log">
         {#each info.log as l, i (i)}
           <li>
             <span class="time">{fmt(l.ts)}</span>
-            <span class="what grow"><span class="mono">{l.tool}</span>{l.detail ? ` · ${l.detail}` : ""}</span>
+            <span class="what grow"><span class="mono">{l.tool}</span>{#if l.detail}<span class="detail">{l.detail}</span>{/if}</span>
             <span class="tag {OUTCOMES[l.outcome].cls}">{OUTCOMES[l.outcome].label}</span>
           </li>
         {/each}
@@ -140,15 +135,14 @@
 {#if error}<p class="error"><Icon name="warning-circle" size={16} /> {error}</p>{/if}
 
 <style>
-  /* Wie .field > label */
-  .lbl {
-    display: block;
-    font-size: 12px;
-    margin-bottom: 5px;
-    color: color-mix(in srgb, var(--color-text) 70%, transparent);
+  h5 {
+    margin: 0 0 var(--space-3);
+  }
+  h5 + .hint {
+    margin: calc(var(--space-2) * -1) 0 var(--space-3);
   }
   .field {
-    margin-top: var(--space-4);
+    margin-top: var(--space-8);
   }
   .cmd {
     font-size: 12px;
@@ -185,5 +179,9 @@
   }
   .what {
     overflow-wrap: anywhere;
+  }
+  .detail {
+    margin-left: var(--space-3);
+    color: var(--color-text-muted);
   }
 </style>
