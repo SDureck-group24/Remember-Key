@@ -28,6 +28,12 @@ textarea {
   font-family: inherit;
 }
 
+/* Schmale, gedämpfte Scrollleisten statt der breiten Windows-Standardleisten. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--color-text) 22%, transparent) transparent;
+}
+
 .mono {
   font-family: var(--font-mono);
 }

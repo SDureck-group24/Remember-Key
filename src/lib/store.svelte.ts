@@ -20,6 +20,8 @@ class VaultStore {
   folders = $state<Folder[]>([]);
   /** Geöffneter Ordner; `null` = alle Einträge. */
   current = $state<string | null>(null);
+  /** Gefilterte Ansicht in der Seitenleiste; schließt einen geöffneten Ordner aus. */
+  filter = $state<"totp" | "agent" | null>(null);
   expanded = $state<Record<string, boolean>>({});
   editing = $state<Editing>(null);
   confirmDelete = $state<Folder | null>(null);
@@ -52,6 +54,7 @@ class VaultStore {
     this.entries = [];
     this.folders = [];
     this.current = null;
+    this.filter = null;
     this.editing = null;
     this.confirmDelete = null;
     this.loaded = false;
@@ -96,9 +99,16 @@ class VaultStore {
 
   open(id: string | null) {
     this.current = id;
+    this.filter = null;
     this.navigation++;
     // Pfad im Baum aufklappen, damit der aktive Ordner sichtbar ist.
     for (const f of this.path(id).slice(0, -1)) this.expanded[f.id] = true;
+  }
+
+  showFilter(filter: "totp" | "agent") {
+    this.current = null;
+    this.filter = filter;
+    this.navigation++;
   }
 
   toggle(id: string) {

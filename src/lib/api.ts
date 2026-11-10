@@ -327,3 +327,17 @@ export function subtree(folders: Folder[], id: string): Set<string> {
 /** Drag-and-Drop-Nutzlast zwischen Kacheln und Ordnerbaum. */
 export const DND_TYPE = "application/x-remember-key";
 export type DragItem = { kind: "entry" | "folder"; id: string };
+
+/** Anfangsbuchstabe des Titels für das Eintragssymbol. */
+export function entryInitial(title: string) {
+  return [...title.trim()][0]?.toUpperCase() ?? "?";
+}
+
+/** Hostname der Website eines Eintrags; bei ungültiger URL der Text selbst. */
+export function entryHost(url: string) {
+  try {
+    return url ? new URL(url.includes("://") ? url : `https://${url}`).hostname : "";
+  } catch {
+    return url;
+  }
+}

@@ -35,6 +35,9 @@ import shieldCheck from "@phosphor-icons/core/assets/regular/shield-check.svg?ra
 import trash from "@phosphor-icons/core/assets/regular/trash.svg?raw";
 import warningCircle from "@phosphor-icons/core/assets/regular/warning-circle.svg?raw";
 import x from "@phosphor-icons/core/assets/regular/x.svg?raw";
+import sparkle from "@phosphor-icons/core/assets/regular/sparkle.svg?raw";
+import listBullets from "@phosphor-icons/core/assets/regular/list-bullets.svg?raw";
+import sidebarSimple from "@phosphor-icons/core/assets/regular/sidebar-simple.svg?raw";
 
 // Remember-Key-Logo ohne Kachel (Quelle: src-tauri/icons/app-icon.svg), in der Textfarbe gezeichnet.
 const logo =
@@ -80,6 +83,9 @@ export const icons = {
   trash,
   "warning-circle": warningCircle,
   x,
+  sparkle,
+  "list-bullets": listBullets,
+  "sidebar-simple": sidebarSimple,
 } as const;
 
 export type IconName = keyof typeof icons;
