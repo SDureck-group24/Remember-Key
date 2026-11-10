@@ -1,5 +1,5 @@
 /* Kopie von design/Nocturne/styles.css – bei Änderungen am Designsystem neu kopieren.
-   Google-Fonts-Import entfernt: Inter kommt lokal aus @fontsource-variable/inter (CSP, offline). */
+   Google-Fonts-Import entfernt: Die Schrift (Titillium Web) bindet src/app.css lokal ein (CSP, offline). */
 /* Nocturne — design-system tokens and component classes. This file is the source of truth for the system's look; retune it here and see readme.md. */
 
 :root {

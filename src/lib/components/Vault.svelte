@@ -438,7 +438,7 @@
     min-height: 0;
     margin: var(--space-3) 0 var(--space-3) var(--space-3);
     border-radius: var(--radius-lg);
-    background: color-mix(in srgb, var(--color-surface) 70%, var(--color-bg));
+    background: var(--color-panel);
     box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-text) 8%, transparent);
   }
   .brand {
@@ -653,7 +653,7 @@
     max-height: calc(100vh - 2 * var(--space-4));
     padding: var(--space-4) var(--space-2) var(--space-4) 0;
     border-radius: var(--radius-lg);
-    background: var(--color-bg);
+    background: var(--color-panel);
     box-shadow: var(--shadow-lg);
   }
   .entry-dialog:focus {

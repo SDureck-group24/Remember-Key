@@ -28,7 +28,7 @@
   }
   .ai {
     display: inline-flex;
-    color: var(--color-accent);
+    color: var(--color-accent-2);
   }
   .sr {
     position: absolute;

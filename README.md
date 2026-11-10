@@ -14,10 +14,11 @@ npm run tauri build    # Installer (NSIS/MSI) unter src-tauri/target/release/bun
 
 ## Design
 
-Oberfläche im Designsystem **Nocturne** (`design/Nocturne/`). Die App nutzt eine Kopie des Stylesheets unter
-`src/lib/nocturne/styles.css` (ohne Google-Fonts-Import); Inter und Phosphor-Icons sind lokal eingebunden
-(`@fontsource-variable/inter`, `@phosphor-icons/core`). App-eigene Ergänzungen stehen in `src/app.css`.
-Nach Änderungen am Designsystem `styles.css` neu kopieren.
+Komponenten, Abstände und Radien aus dem Designsystem **Nocturne** (`design/Nocturne/`), Farben und Schrift aus
+dem **group24 Design System** (Dark-Theme). Die App nutzt eine Kopie des Nocturne-Stylesheets unter
+`src/lib/nocturne/styles.css` (ohne Google-Fonts-Import); `src/app.css` überschreibt dessen Farb- und
+Schrift-Tokens mit den group24-Werten. Titillium Web liegt lokal unter `src/lib/fonts/`, Phosphor-Icons kommen
+aus `@phosphor-icons/core`. Nach Änderungen an Nocturne `styles.css` neu kopieren.
 
 ## Sicherheitsmodell
 
